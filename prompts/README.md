@@ -16,3 +16,5 @@ These prompt files are carefully consolidated and organized from the conversatio
 
 ## Addendum
 `05-VOICE-PERSONALITY-HUMOR.md` (2026-11-12) adds mandatory voice, personality, humor and memory requirements. It extends the voice sections of 01 and 02. Prompt 03's hardware and performance limits still apply to it.
+
+`06-GITHUB-INSTALL-AND-WEB-SETUP.md` (2026-11-12) adds mandatory installation, web setup wizard, update and recovery requirements, and asks for them before the integrations.
