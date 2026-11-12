@@ -77,3 +77,9 @@ After each session append dated lines with: milestone, files changed, tests run 
 - **Local builds:** impossible on the development PC (Application Control blocks compiled programs; WSL2 would not start). GitHub Actions is the only build and test loop.
 - **Added requirements:** `prompts/05` (voice, personality, humor, memory → M4/M4b) and `prompts/06` (GitHub install and web-first setup → M1b, next).
 - **Next single action:** M1b item 1, setup token hardening, after the user decides whether the repository becomes public.
+
+### 2026-11-12 (evening) — M1b items 1 and 2 pass in CI, including a real-binary smoke test
+- **Evidence:** CI run #3 (commit 5421b7c, setup-token hardening) and run #4 (commit 5528d79, HTTPS + smoke job), both Success. Run #4 took 3m 16s across jobs `rust`, `web`, `smoke`.
+- **What the smoke job proves, on a GitHub Linux runner with the baseline release binary:** plaintext refused off loopback; certificate created with key mode 600; served certificate matches `tls-fingerprint`; curl verifies the server against that certificate without `-k`; frontend and CSP header served; anonymous API refused; setup refused without a token and with a wrong token, accepted once with the real one, not repeatable; login, device list, a confirmed simulator command, metrics; cross-origin POST refused; clean exit on SIGTERM; after restart the certificate, session, device state and closed setup all persist.
+- **Still unproven:** nothing has run in a browser by a person (no A01 screenshot, no A04). Nothing has run on the Mac mini or any Core 2 CPU (A08). No installer, release workflow, systemd unit, wizard, users page, updates or backups yet.
+- **Next single action:** M1b item 3, the release workflow (versioned bundle of binary + web/dist + checksums + signature), then `install.sh` against that bundle.
