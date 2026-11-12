@@ -23,7 +23,7 @@ done
 
 echo "== get.sh refuses to run without root"
 out=$(bash get.sh --version v0.1.0 2>&1 || true)
-printf '%s\n' "$out" | grep -q 'Run as root' || fail "get.sh did not demand root"
+grep -q 'Run as root' <<< "$out" || fail "get.sh did not demand root"
 
 echo "== real download and Sigstore verification of v0.1.0"
 set +e
@@ -32,9 +32,9 @@ rc=$?
 set -e
 printf '%s\n' "$out"
 [ "$rc" -ne 0 ] || fail "get.sh accepted a release that has no installer"
-printf '%s\n' "$out" | grep -q 'Downloaded home-ai-0.1.0-linux-x86_64.tar.gz' || fail "bundle was not downloaded"
-printf '%s\n' "$out" | grep -q 'Verified: signed by the Home-AI release workflow' || fail "real release was not verified by Sigstore"
-printf '%s\n' "$out" | grep -q 'does not contain the installer' || fail "missing-installer refusal not shown"
+grep -q 'Downloaded home-ai-0.1.0-linux-x86_64.tar.gz' <<< "$out" || fail "bundle was not downloaded"
+grep -q 'Verified: signed by the Home-AI release workflow' <<< "$out" || fail "real release was not verified by Sigstore"
+grep -q 'does not contain the installer' <<< "$out" || fail "missing-installer refusal not shown"
 [ ! -e /opt/home-ai ] || fail "something was installed"
 [ ! -e /etc/systemd/system/home-ai.service ] || fail "a service was installed"
 
@@ -44,6 +44,6 @@ out=$(sudo HOME_AI_GITHUB_TOKEN="$GH_TOKEN" bash get.sh --version v9.9.9 2>&1)
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "get.sh accepted a nonexistent release"
-printf '%s\n' "$out" | grep -q 'was not found' || fail "no clear message for a missing release"
+grep -q 'was not found' <<< "$out" || fail "no clear message for a missing release"
 
 echo "GET TEST PASSED"

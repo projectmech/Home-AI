@@ -80,7 +80,8 @@ BROKEN=$(TEST_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$W/broken-hom
 # Without these two variables the scripts use the production Sigstore path.
 # The installer that ships INSIDE the bundle is the one under test: this is what
 # get.sh runs on a real server, so its relative paths must work unpacked.
-tar tzf "$GOOD" | grep -q '/installer/install.sh$' || fail "bundle does not contain installer/install.sh"
+LISTING=$(tar tzf "$GOOD")
+grep -q '/installer/install.sh$' <<< "$LISTING" || fail "bundle does not contain installer/install.sh"
 mkdir -p "$W/unpacked"
 tar -xzf "$GOOD" -C "$W/unpacked"
 BUNDLED=$(echo "$W"/unpacked/*/installer)
