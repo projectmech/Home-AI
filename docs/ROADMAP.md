@@ -105,3 +105,8 @@ After each session append dated lines with: milestone, files changed, tests run 
 - **Not yet proven:** that a machine OTHER than the CI runner accepts this release (no one has run `sudo ./install.sh` with a download from the private repo and a token); Debian 13; the Mac mini / any Core 2 CPU; running cosign on that CPU; the wizard and dashboard in a real browser.
 - **Public record:** this release wrote the repository name, workflow path, tag, commit and bundle hash to Sigstore's public log. Permanent.
 - **Next single action:** install v0.1.0 on a real Debian machine (the Mac mini) with `sudo ./install.sh`, and report what happens.
+
+### 2026-11-12 (night) — one-command installer `get.sh` written; needs release v0.1.1
+- **Written:** `get.sh` (download, Sigstore verification with the pinned cosign, then run the installer from the verified bundle); `scripts/package.sh` now ships `installer/` (install.sh, update.sh, uninstall.sh, packaging files) inside the signed bundle; install tests now run the bundled installer; `scripts/test-get.sh` checks get.sh against the real v0.1.0 release (download, anonymous refusal then token, real Sigstore verification, clean refusal because v0.1.0 has no installer). CI also checks get.sh and lib.sh carry identical verification constants. Version bumped to 0.1.1.
+- **Not done until CI is green and v0.1.1 is tagged:** a real one-command install. The user must push the tag (the agent's permission check blocks tag pushes).
+- **Untested:** fetching `get.sh` through the GitHub API with a token (documented one-liner); anything on Debian 13 or the Mac mini.

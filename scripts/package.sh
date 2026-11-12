@@ -3,7 +3,7 @@
 # Usage: scripts/package.sh <home-ai-binary> <web-dist-dir> <output-dir>
 #
 # Produces <output-dir>/home-ai-<version>-linux-x86_64.tar.gz (binary, web/,
-# VERSION) and prints its path on the last line.
+# VERSION, installer/) and prints its path on the last line.
 #
 # Signing is NOT done here. Real releases are signed with Sigstore in the
 # Release workflow (scripts/release-sign.sh). For CI install tests only,
@@ -27,6 +27,16 @@ mkdir -p "$STAGE/$NAME" "$OUT"
 install -m 0755 "$BIN" "$STAGE/$NAME/home-ai"
 cp -r "$WEB" "$STAGE/$NAME/web"
 printf '%s\n' "$VERSION" > "$STAGE/$NAME/VERSION"
+
+# The installer travels inside the signed bundle, so `get.sh` can run it only
+# after the whole bundle has been verified.
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+mkdir -p "$STAGE/$NAME/installer/packaging"
+for f in install.sh update.sh uninstall.sh; do
+  install -m 0755 "$REPO/$f" "$STAGE/$NAME/installer/$f"
+done
+install -m 0644 "$REPO/packaging/lib.sh" "$REPO/packaging/home-ai.service" \
+  "$REPO/packaging/home-ai.env.template" "$STAGE/$NAME/installer/packaging/"
 
 OUT=$(readlink -f "$OUT")
 # Fixed owner and order so the same inputs give the same archive.

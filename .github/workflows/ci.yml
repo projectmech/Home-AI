@@ -80,5 +80,9 @@ jobs:
           name: web-dist
           path: out/web
       - run: chmod +x out/bin/home-ai
-      - run: bash -n install.sh && bash -n update.sh && bash -n uninstall.sh && bash -n packaging/lib.sh
-      - run: bash scripts/test-install.sh out/bin/home-ai out/web
+      - run: bash -n install.sh && bash -n update.sh && bash -n uninstall.sh && bash -n get.sh && bash -n packaging/lib.sh
+      - run: bash scripts/ci-run.sh install-test bash scripts/test-install.sh out/bin/home-ai out/web
+      - name: get.sh against the real v0.1.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-run.sh get-test bash scripts/test-get.sh

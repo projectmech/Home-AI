@@ -18,6 +18,26 @@ The terminal is for installing and for emergencies. Everything else is meant to 
 | `/etc/systemd/system/home-ai.service` | service definition |
 | `/usr/local/bin/home-ai` | admin command (`sudo home-ai …`) |
 
+## One-command install (recommended)
+`get.sh` downloads the latest release, **proves with Sigstore that it was signed by this project's release workflow**, and only then runs the installer that ships inside the release. Nothing from the download runs before it is verified, and there is no switch to skip that. Status: written and CI-tested up to the verification step against v0.1.0; **a full one-command install needs release v0.1.1 or later**, because v0.1.0 does not contain the installer, and has not been run on a real machine.
+
+The script is the trust anchor and runs as root, so read it before running it: [get.sh](../get.sh).
+
+**While the repository is private** GitHub refuses downloads without a token. Create a fine-grained token limited to this repository with "Contents: Read-only", then on the server:
+```
+read -rsp "GitHub token: " T; echo
+curl -fsSL -H "Authorization: Bearer $T" -H "Accept: application/vnd.github.raw+json" \
+  https://api.github.com/repos/projectmech/Home-AI/contents/get.sh -o get-home-ai.sh \
+  && sudo HOME_AI_GITHUB_TOKEN="$T" bash get-home-ai.sh; rm -f get-home-ai.sh; unset T
+```
+The token is read without echo, used for the downloads, and not saved. (The first command's download of `get.sh` through the API is untested.)
+
+**If the repository is made public** it becomes:
+```
+curl -fsSL https://raw.githubusercontent.com/projectmech/Home-AI/main/get.sh -o get-home-ai.sh && sudo bash get-home-ai.sh && rm get-home-ai.sh
+```
+Piping straight into `sudo bash` also works but gives you no chance to read the script first. Options: `--version v0.1.1` for a specific release, `--force-distro` for a system other than Debian or Ubuntu.
+
 ## Install
 The repository is private, so the server cannot download from GitHub anonymously. Two ways:
 

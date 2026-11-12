@@ -78,8 +78,17 @@ BROKEN=$(TEST_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$W/broken-hom
 
 # sudo drops the environment, so the CI test hook has to be passed explicitly.
 # Without these two variables the scripts use the production Sigstore path.
-INSTALL=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" ./install.sh)
-UPDATE=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" ./update.sh)
+# The installer that ships INSIDE the bundle is the one under test: this is what
+# get.sh runs on a real server, so its relative paths must work unpacked.
+tar tzf "$GOOD" | grep -q '/installer/install.sh$' || fail "bundle does not contain installer/install.sh"
+mkdir -p "$W/unpacked"
+tar -xzf "$GOOD" -C "$W/unpacked"
+BUNDLED=$(echo "$W"/unpacked/*/installer)
+[ -x "$BUNDLED/install.sh" ] && [ -x "$BUNDLED/update.sh" ] && [ -f "$BUNDLED/packaging/lib.sh" ] \
+  && [ -f "$BUNDLED/packaging/home-ai.service" ] && [ -f "$BUNDLED/packaging/home-ai.env.template" ] \
+  || fail "bundled installer is incomplete"
+INSTALL=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" "$BUNDLED/install.sh")
+UPDATE=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" "$BUNDLED/update.sh")
 
 step "production path: a bundle with no Sigstore evidence is refused"
 expect_refused "bundle without .sigstore.json" sudo ./install.sh --bundle "$GOOD"
