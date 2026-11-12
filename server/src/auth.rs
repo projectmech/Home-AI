@@ -21,7 +21,6 @@ use crate::policy::Role;
 use crate::AppState;
 
 pub const SESSION_COOKIE: &str = "home_ai_session";
-pub const SESSION_TTL_S: i64 = 12 * 60 * 60;
 pub const MIN_PASSWORD_LEN: usize = 12;
 const MAX_PASSWORD_LEN: usize = 256;
 
@@ -96,10 +95,8 @@ pub fn token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
-pub fn session_cookie(token: &str) -> String {
-    format!(
-        "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_S}"
-    )
+pub fn session_cookie(token: &str, ttl_s: i64) -> String {
+    format!("{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={ttl_s}")
 }
 
 pub fn clear_cookie() -> String {

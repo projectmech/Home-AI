@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, ApiError, type Action, type Device, type Role } from '../lib/api';
   import { applyDevice } from '../lib/live.svelte';
+  import { temperature } from '../lib/prefs.svelte';
 
   let { device, role }: { device: Device; role: Role } = $props();
 
@@ -68,7 +69,7 @@
       </label>
     {/if}
   {:else if device.kind === 'thermostat'}
-    <p class="state">{num(s.current_c)?.toFixed(1) ?? 'Not available'} °C now · target {num(s.target_c)?.toFixed(1) ?? '?'} °C</p>
+    <p class="state">{temperature(s.current_c)} now · target {temperature(s.target_c)}</p>
     {#if canControl}
       <div class="row">
         <button disabled={busy || (num(s.target_c) ?? 0) <= 5} aria-label="Lower target by half a degree"
@@ -112,7 +113,7 @@
       {/if}
     {/if}
   {:else if device.kind === 'temperature_sensor'}
-    <p class="state">{num(s.temperature_c)?.toFixed(1) ?? 'Not available'} °C</p>
+    <p class="state">{temperature(s.temperature_c)}</p>
   {:else}
     <p class="muted small">Not supported in this version.</p>
   {/if}

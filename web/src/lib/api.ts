@@ -4,6 +4,30 @@ export type DeviceKind = 'light' | 'thermostat' | 'speaker' | 'lock' | 'temperat
 export interface User {
   username: string;
   role: Role;
+  /** False until an administrator has finished the setup wizard. */
+  setup_complete: boolean;
+}
+
+export interface ServerInfo {
+  host_name: string | null;
+  os: string;
+  cpu_model: string;
+  logical_cores: number;
+  mem_total_bytes: number;
+  version: string;
+}
+
+export interface HomeSettings {
+  home_name: string;
+  country: string;
+  timezone: string;
+  language: 'en' | 'nb';
+  temperature_unit: 'celsius' | 'fahrenheit';
+  rooms: string[];
+}
+
+export interface SecuritySettings {
+  session_hours: number;
 }
 
 export interface Device {
@@ -118,7 +142,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   health: () => request<{ setup_required: boolean; version: string }>('GET', '/health'),
   setup: (setup_token: string, username: string, password: string) =>
-    request<{ ok: true }>('POST', '/setup', { setup_token, username, password }),
+    request<User>('POST', '/setup', { setup_token, username, password }),
+  setupVerify: (setup_token: string) => request<{ server: ServerInfo }>('POST', '/setup/verify', { setup_token }),
+  finishSetup: () => request<{ ok: true }>('POST', '/setup/finish'),
+  getHome: () => request<{ home: HomeSettings }>('GET', '/settings/home'),
+  putHome: (home: HomeSettings) => request<{ home: HomeSettings }>('PUT', '/settings/home', home),
+  getSecurity: () => request<{ security: SecuritySettings }>('GET', '/settings/security'),
+  putSecurity: (security: SecuritySettings) =>
+    request<{ security: SecuritySettings }>('PUT', '/settings/security', security),
   login: (username: string, password: string) => request<User>('POST', '/login', { username, password }),
   logout: () => request<{ ok: true }>('POST', '/logout'),
   me: () => request<User>('GET', '/me'),

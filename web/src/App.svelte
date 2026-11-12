@@ -6,6 +6,8 @@
   import Home from './pages/Home.svelte';
   import Server from './pages/Server.svelte';
   import Activity from './pages/Activity.svelte';
+  import Wizard from './pages/Wizard.svelte';
+  import { loadPrefs } from './lib/prefs.svelte';
 
   type Phase = 'loading' | 'unreachable' | 'setup' | 'login' | 'app';
 
@@ -42,13 +44,34 @@
     }
   }
 
-  function enter() {
-    phase = 'app';
+  function goLive() {
     connect(() => {
       user = null;
       phase = 'login';
     });
+    loadPrefs();
   }
+
+  function enter() {
+    phase = 'app';
+    goLive();
+  }
+
+  // The wizard created the administrator and signed them in; it keeps going.
+  function adminCreated(u: User) {
+    user = u;
+    goLive();
+  }
+
+  function wizardDone() {
+    if (user) user.setup_complete = true;
+    phase = 'app';
+    go('/');
+  }
+
+  const inWizard = $derived(
+    phase === 'setup' || (phase === 'app' && user?.role === 'admin' && user.setup_complete === false),
+  );
 
   function signedIn(u: User) {
     user = u;
@@ -95,8 +118,10 @@
       <button class="primary" onclick={boot}>Try again</button>
     </div>
   </main>
-{:else if phase === 'setup' || phase === 'login'}
-  <Auth mode={phase} onsetup={() => (phase = 'login')} onlogin={signedIn} />
+{:else if inWizard}
+  <Wizard resume={phase === 'app'} onadmin={adminCreated} ondone={wizardDone} />
+{:else if phase === 'login'}
+  <Auth mode="login" onsetup={() => {}} onlogin={signedIn} />
 {:else if user}
   <header>
     <strong>Home AI</strong>

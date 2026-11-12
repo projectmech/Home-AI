@@ -18,6 +18,7 @@ use crate::devices;
 use crate::error::ApiError;
 use crate::events::Event;
 use crate::policy::{self, Action, Decision, Role};
+use crate::settings::{self, HomeSettings, SecuritySettings};
 use crate::{hwdiag, now, ws, AppState};
 
 const CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
@@ -30,6 +31,10 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/setup", post(setup))
+        .route("/setup/verify", post(setup_verify))
+        .route("/setup/finish", post(setup_finish))
+        .route("/settings/home", get(get_home).put(put_home))
+        .route("/settings/security", get(get_security).put(put_security))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
@@ -101,7 +106,9 @@ struct SetupReq {
     password: String,
 }
 
-async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<Response, ApiError> {
+/// Gate for both setup endpoints: setup still open, not rate-limited, and the
+/// one-time token is the issued, unexpired one.
+async fn require_setup_token(s: &AppState, supplied: &str) -> Result<(), ApiError> {
     if !s.setup_required() {
         return Err(ApiError::Conflict(
             "Setup has already been completed.".into(),
@@ -112,7 +119,7 @@ async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<R
     if let Some(wait) = s.limiter.locked_for(auth::SETUP_LIMIT_KEY) {
         return Err(ApiError::TooManyRequests(wait));
     }
-    let supplied = req.setup_token.trim().to_string();
+    let supplied = supplied.trim().to_string();
     let check =
         s.db.call(move |c| auth::check_setup_token(c, &supplied))
             .await?;
@@ -132,6 +139,59 @@ async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<R
             .await;
         return Err(ApiError::Forbidden(message.into()));
     }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct SetupVerifyReq {
+    setup_token: String,
+}
+
+/// Wizard step 1: prove possession of the token, get basic server facts back.
+/// Nothing about the machine is disclosed without the token. The token is
+/// not consumed here.
+async fn setup_verify(
+    State(s): State<AppState>,
+    Json(req): Json<SetupVerifyReq>,
+) -> Result<Json<Value>, ApiError> {
+    require_setup_token(&s, &req.setup_token).await?;
+    let st = s.clone();
+    let m = tokio::task::spawn_blocking(move || st.metrics.collect())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({
+        "server": {
+            "host_name": m.host_name,
+            "os": [m.os_name, m.os_version].into_iter().flatten().collect::<Vec<_>>().join(" "),
+            "cpu_model": m.cpu_model,
+            "logical_cores": m.logical_cores,
+            "mem_total_bytes": m.mem_total_bytes,
+            "version": m.app_version,
+        }
+    })))
+}
+
+/// Create a session for `user_id` and return the Set-Cookie value. A fresh
+/// token every time: no session fixation.
+async fn start_session(s: &AppState, user_id: i64) -> Result<String, ApiError> {
+    let token = auth::new_token();
+    let hash = auth::token_hash(&token);
+    let ttl =
+        s.db.call(move |c| {
+            let ttl = settings::load_security(c)?.session_ttl_s();
+            c.execute(
+                "INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![hash, user_id, now(), now() + ttl],
+            )?;
+            Ok(ttl)
+        })
+        .await?;
+    Ok(auth::session_cookie(&token, ttl))
+}
+
+async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<Response, ApiError> {
+    require_setup_token(&s, &req.setup_token).await?;
     let username = req.username.trim().to_string();
     auth::validate_username(&username)?;
     auth::validate_password(&req.password)?;
@@ -151,19 +211,20 @@ async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<R
                  SELECT ?1, ?2, 'admin', ?3 WHERE NOT EXISTS (SELECT 1 FROM users)",
                 params![uname, hash, now()],
             )?;
+            let user_id = tx.last_insert_rowid();
             // The token dies in the same transaction that creates the admin.
             auth::clear_setup_token(&tx)?;
             tx.commit()?;
-            Ok(created)
+            Ok((created > 0).then_some(user_id))
         })
         .await?;
     s.mark_setup_done();
     s.limiter.clear(auth::SETUP_LIMIT_KEY);
-    if created == 0 {
+    let Some(user_id) = created else {
         return Err(ApiError::Conflict(
             "Setup has already been completed.".into(),
         ));
-    }
+    };
     s.audit(
         Some(&username),
         "setup",
@@ -172,7 +233,77 @@ async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<R
         Some("administrator created"),
     )
     .await;
-    Ok((StatusCode::CREATED, Json(json!({ "ok": true }))).into_response())
+    // Signed in straight away so the rest of the wizard runs authenticated.
+    // From here on the setup endpoints are closed for good.
+    let cookie = start_session(&s, user_id).await?;
+    Ok((
+        StatusCode::CREATED,
+        [(SET_COOKIE, cookie)],
+        Json(json!({ "username": username, "role": "admin", "setup_complete": false })),
+    )
+        .into_response())
+}
+
+/// Wizard last step: the administrator confirms the configuration.
+async fn setup_finish(State(s): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    user.require_admin()?;
+    s.db.call(|c| settings::mark_wizard_complete(c)).await?;
+    s.audit(
+        Some(&user.username),
+        "setup_finish",
+        None,
+        "ok",
+        Some("setup wizard completed"),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---- settings ---------------------------------------------------------------
+
+async fn get_home(State(s): State<AppState>, _user: AuthUser) -> Result<Json<Value>, ApiError> {
+    let home = s.db.call(|c| settings::load_home(c)).await?;
+    Ok(Json(json!({ "home": home })))
+}
+
+async fn put_home(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(home): Json<HomeSettings>,
+) -> Result<Json<Value>, ApiError> {
+    user.require_admin()?;
+    let home = home.validated().map_err(ApiError::BadRequest)?;
+    let saved = home.clone();
+    s.db.call(move |c| settings::save_home(c, &saved)).await?;
+    s.audit(Some(&user.username), "settings_home", None, "ok", None)
+        .await;
+    Ok(Json(json!({ "home": home })))
+}
+
+async fn get_security(State(s): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    user.require_admin()?;
+    let security = s.db.call(|c| settings::load_security(c)).await?;
+    Ok(Json(json!({ "security": security })))
+}
+
+async fn put_security(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(security): Json<SecuritySettings>,
+) -> Result<Json<Value>, ApiError> {
+    user.require_admin()?;
+    let security = security.validated().map_err(ApiError::BadRequest)?;
+    s.db.call(move |c| settings::save_security(c, &security))
+        .await?;
+    s.audit(
+        Some(&user.username),
+        "settings_security",
+        None,
+        "ok",
+        Some(&format!("session_hours={}", security.session_hours)),
+    )
+    .await;
+    Ok(Json(json!({ "security": security })))
 }
 
 // ---- sessions ---------------------------------------------------------------
@@ -223,23 +354,13 @@ async fn login(State(s): State<AppState>, Json(req): Json<LoginReq>) -> Result<R
     };
     s.limiter.clear(&key);
 
-    // A fresh token on every login: no session fixation.
-    let token = auth::new_token();
-    let hash = auth::token_hash(&token);
-    let uid = user.0;
-    s.db.call(move |c| {
-        c.execute(
-            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![hash, uid, now(), now() + auth::SESSION_TTL_S],
-        )
-    })
-    .await?;
+    let cookie = start_session(&s, user.0).await?;
     s.audit(Some(&user.1), "login", None, "ok", None).await;
+    let setup_complete = s.db.call(|c| settings::wizard_complete(c)).await?;
 
     Ok((
-        [(SET_COOKIE, auth::session_cookie(&token))],
-        Json(json!({ "username": user.1, "role": user.2 })),
+        [(SET_COOKIE, cookie)],
+        Json(json!({ "username": user.1, "role": user.2, "setup_complete": setup_complete })),
     )
         .into_response())
 }
@@ -257,8 +378,13 @@ async fn logout(State(s): State<AppState>, user: AuthUser) -> Result<Response, A
         .into_response())
 }
 
-async fn me(user: AuthUser) -> Json<Value> {
-    Json(json!({ "username": user.username, "role": user.role }))
+async fn me(State(s): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    let setup_complete = s.db.call(|c| settings::wizard_complete(c)).await?;
+    Ok(Json(json!({
+        "username": user.username,
+        "role": user.role,
+        "setup_complete": setup_complete,
+    })))
 }
 
 // ---- devices ----------------------------------------------------------------

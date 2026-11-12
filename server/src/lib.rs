@@ -9,6 +9,7 @@ pub mod events;
 pub mod hwdiag;
 pub mod metrics;
 pub mod policy;
+pub mod settings;
 pub mod tls;
 pub mod ws;
 

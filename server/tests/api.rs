@@ -625,3 +625,170 @@ async fn websocket_sends_snapshot_then_live_device_events() {
     assert_eq!(event["device"]["state"]["volume"], 40);
     assert!(event["seq"].as_u64().unwrap() > first["seq"].as_u64().unwrap());
 }
+
+/// prompts/06 §5: token-gated welcome, administrator, home, security, finish.
+#[tokio::test]
+async fn setup_wizard_flow() {
+    let state = new_state().await;
+    let app = api::router(state.clone());
+    let token = state.issue_setup_token().await.unwrap().unwrap();
+
+    // Step 1: server facts are disclosed only with the token, which is not consumed.
+    let no = call(
+        &app,
+        Method::POST,
+        "/api/setup/verify",
+        None,
+        Some(json!({ "setup_token": "0".repeat(64) })),
+    )
+    .await;
+    assert_eq!(no.status, StatusCode::FORBIDDEN);
+    assert!(no.body["server"].is_null());
+    let yes = call(
+        &app,
+        Method::POST,
+        "/api/setup/verify",
+        None,
+        Some(json!({ "setup_token": token })),
+    )
+    .await;
+    assert_eq!(yes.status, StatusCode::OK);
+    assert!(yes.body["server"]["mem_total_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(yes.body["server"]["version"], env!("CARGO_PKG_VERSION"));
+
+    // Settings are closed before an administrator exists.
+    let anon = call(&app, Method::GET, "/api/settings/home", None, None).await;
+    assert_eq!(anon.status, StatusCode::UNAUTHORIZED);
+    let anon = call(&app, Method::POST, "/api/setup/finish", None, None).await;
+    assert_eq!(anon.status, StatusCode::UNAUTHORIZED);
+
+    // Step 2: creating the administrator signs them in.
+    let created = try_setup(&app, &token, ADMIN_PW).await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(created.body["setup_complete"], false);
+    let admin = created.cookie.expect("setup must set a session cookie");
+    let me = call(&app, Method::GET, "/api/me", Some(&admin), None).await;
+    assert_eq!(me.body["role"], "admin");
+    assert_eq!(me.body["setup_complete"], false);
+
+    // The token-gated endpoints are closed from here on.
+    let again = call(
+        &app,
+        Method::POST,
+        "/api/setup/verify",
+        None,
+        Some(json!({ "setup_token": token })),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+
+    // Step 3: home configuration, validated and normalised.
+    let defaults = call(&app, Method::GET, "/api/settings/home", Some(&admin), None).await;
+    assert_eq!(defaults.body["home"]["temperature_unit"], "celsius");
+    let bad = call(
+        &app,
+        Method::PUT,
+        "/api/settings/home",
+        Some(&admin),
+        Some(
+            json!({ "home_name": "", "country": "NO", "timezone": "Europe/Oslo",
+                     "language": "nb", "temperature_unit": "celsius", "rooms": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let saved = call(
+        &app,
+        Method::PUT,
+        "/api/settings/home",
+        Some(&admin),
+        Some(
+            json!({ "home_name": " Villa ", "country": "no", "timezone": "Europe/Oslo",
+                     "language": "nb", "temperature_unit": "fahrenheit",
+                     "rooms": ["Stue", " Kjøkken ", "stue"] }),
+        ),
+    )
+    .await;
+    assert_eq!(saved.status, StatusCode::OK);
+    assert_eq!(saved.body["home"]["home_name"], "Villa");
+    assert_eq!(saved.body["home"]["country"], "NO");
+    assert_eq!(saved.body["home"]["rooms"], json!(["Stue", "Kjøkken"]));
+
+    // Step 8: session length is real: it sets the cookie lifetime of new sign-ins.
+    let bad = call(
+        &app,
+        Method::PUT,
+        "/api/settings/security",
+        Some(&admin),
+        Some(json!({ "session_hours": 0 })),
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let ok = call(
+        &app,
+        Method::PUT,
+        "/api/settings/security",
+        Some(&admin),
+        Some(json!({ "session_hours": 2 })),
+    )
+    .await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "username": "admin", "password": ADMIN_PW }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let set_cookie = res.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("Max-Age=7200"), "{set_cookie}");
+
+    // Non-administrators can read home settings but change nothing.
+    api::create_user(&state, "standard", ADMIN_PW, Role::Standard)
+        .await
+        .unwrap();
+    let standard = login(&app, "standard", ADMIN_PW).await;
+    let r = call(
+        &app,
+        Method::GET,
+        "/api/settings/home",
+        Some(&standard),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = call(
+        &app,
+        Method::PUT,
+        "/api/settings/security",
+        Some(&standard),
+        Some(json!({ "session_hours": 100 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/setup/finish",
+        Some(&standard),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+
+    // Step 9: finish.
+    let done = call(&app, Method::POST, "/api/setup/finish", Some(&admin), None).await;
+    assert_eq!(done.status, StatusCode::OK);
+    let me = call(&app, Method::GET, "/api/me", Some(&admin), None).await;
+    assert_eq!(me.body["setup_complete"], true);
+}
