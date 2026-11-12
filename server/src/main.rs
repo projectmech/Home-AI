@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use home_ai::db::Db;
-use home_ai::{api, hwdiag, spawn_scheduler, AppState};
+use home_ai::{api, auth, hwdiag, spawn_scheduler, AppState};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key)
@@ -28,6 +28,13 @@ async fn main() -> ExitCode {
         }
     }
 
+    // `home-ai setup-token` issues the one-time first-run token. It needs
+    // write access to the database file, so only a local administrator (or the
+    // installer) can run it. Run it again if the token expired or was lost.
+    if std::env::args().nth(1).as_deref() == Some("setup-token") {
+        return setup_token_command().await;
+    }
+
     let level = env_or("APP_LOG_LEVEL", "info")
         .parse::<tracing::Level>()
         .unwrap_or(tracing::Level::INFO);
@@ -37,6 +44,37 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn setup_token_command() -> ExitCode {
+    let data_dir = PathBuf::from(env_or("APP_DATA_DIR", "./data"));
+    let issued = async {
+        std::fs::create_dir_all(&data_dir).map_err(|e| format!("data dir: {e}"))?;
+        let db = Db::open(&data_dir.join("home-ai.db")).map_err(|e| format!("database: {e}"))?;
+        db.call(auth::issue_setup_token)
+            .await
+            .map_err(|e| format!("{e:?}"))
+    }
+    .await;
+    match issued {
+        Ok(Some(token)) => {
+            println!(
+                "One-time setup token (valid for {} minutes, single use):\n",
+                auth::SETUP_TOKEN_TTL_S / 60
+            );
+            println!("  {token}\n");
+            println!("Any earlier token is now invalid. It is not stored; if you lose it, run this command again.");
+            ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            eprintln!("Setup is already complete: an administrator exists. No token was issued.");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("Could not issue a setup token: {e}");
             ExitCode::FAILURE
         }
     }
@@ -72,9 +110,11 @@ async fn run() -> Result<(), String> {
             web_dir.display()
         );
     }
-    if let Some(token) = state.setup_token() {
-        // Printed to the console only, for the operator at the machine.
-        println!("\n  First-run setup is open. Setup token:\n\n    {token}\n");
+    if state.setup_required() {
+        // The server never issues or prints a token itself.
+        tracing::warn!(
+            "no administrator exists yet; run `home-ai setup-token` on this machine to get a one-time setup token"
+        );
     }
 
     spawn_scheduler(state.clone());

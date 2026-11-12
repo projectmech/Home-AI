@@ -14,7 +14,8 @@ pub mod ws;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
@@ -41,8 +42,8 @@ pub struct Inner {
     pub limiter: LoginLimiter,
     pub connectors: HashMap<&'static str, Arc<dyn Connector>>,
     pub web_dir: PathBuf,
-    /// Present only while no administrator exists. Single use.
-    setup_token: Mutex<Option<String>>,
+    /// True once an administrator exists. Setup can never reopen after that.
+    setup_done: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -76,20 +77,23 @@ impl AppState {
             limiter: LoginLimiter::default(),
             connectors,
             web_dir,
-            setup_token: Mutex::new((user_count == 0).then(auth::new_token)),
+            setup_done: AtomicBool::new(user_count > 0),
         })))
     }
 
-    /// The first-run token, for the operator at the server console.
-    pub fn setup_token(&self) -> Option<String> {
-        self.setup_token
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    /// True while no administrator exists.
+    pub fn setup_required(&self) -> bool {
+        !self.setup_done.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn close_setup(&self) {
-        *self.setup_token.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    pub(crate) fn mark_setup_done(&self) {
+        self.setup_done.store(true, Ordering::SeqCst);
+    }
+
+    /// Issue a one-time setup token (see `auth::issue_setup_token`). Used by
+    /// the `home-ai setup-token` command and by tests; no HTTP route calls it.
+    pub async fn issue_setup_token(&self) -> Result<Option<String>, ApiError> {
+        self.db.call(auth::issue_setup_token).await
     }
 
     /// Append to the audit log. Never pass secrets in `detail`.

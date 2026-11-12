@@ -78,8 +78,23 @@ async fn call_with(
     }
 }
 
+async fn try_setup(app: &Router, token: &str, password: &str) -> Reply {
+    call(
+        app,
+        Method::POST,
+        "/api/setup",
+        None,
+        Some(json!({ "setup_token": token, "username": "admin", "password": password })),
+    )
+    .await
+}
+
 async fn setup_admin(state: &AppState, app: &Router) {
-    let token = state.setup_token().expect("setup open");
+    let token = state
+        .issue_setup_token()
+        .await
+        .unwrap()
+        .expect("setup open");
     let r = call(
         app,
         Method::POST,
@@ -124,17 +139,24 @@ async fn first_run_setup_creates_admin_once() {
     let h = call(&app, Method::GET, "/api/health", None, None).await;
     assert_eq!(h.body["setup_required"], true);
 
-    let bad = call(
-        &app,
-        Method::POST,
-        "/api/setup",
-        None,
-        Some(json!({ "setup_token": "0".repeat(64), "username": "admin", "password": ADMIN_PW })),
-    )
-    .await;
+    // No token issued yet: a fresh server cannot be claimed from the network.
+    let unissued = try_setup(&app, &"0".repeat(64), ADMIN_PW).await;
+    assert_eq!(unissued.status, StatusCode::FORBIDDEN);
+
+    let token = state.issue_setup_token().await.unwrap().unwrap();
+    let bad = try_setup(&app, &"0".repeat(64), ADMIN_PW).await;
     assert_eq!(bad.status, StatusCode::FORBIDDEN);
 
-    let token = state.setup_token().unwrap();
+    // Only a hash is stored.
+    let stored: String = state
+        .db
+        .call(|c| c.query_row("SELECT group_concat(value) FROM settings", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert!(
+        !stored.contains(&token),
+        "token must not be stored in plaintext"
+    );
     let weak = call(
         &app,
         Method::POST,
@@ -145,7 +167,31 @@ async fn first_run_setup_creates_admin_once() {
     .await;
     assert_eq!(weak.status, StatusCode::BAD_REQUEST);
 
+    // An expired token is refused.
+    state
+        .db
+        .call(|c| {
+            c.execute(
+                "UPDATE settings SET value = '0' WHERE key = 'setup_token_expires'",
+                [],
+            )
+        })
+        .await
+        .unwrap();
+    let expired = try_setup(&app, &token, ADMIN_PW).await;
+    assert_eq!(expired.status, StatusCode::FORBIDDEN);
+    assert!(state.setup_required());
+
+    // Issues a fresh token (retiring the old one) and completes setup.
     setup_admin(&state, &app).await;
+    assert!(!state.setup_required());
+    assert!(state.issue_setup_token().await.unwrap().is_none());
+    let leftover: i64 = state
+        .db
+        .call(|c| c.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(leftover, 0, "token must be deleted when setup completes");
 
     let again = call(
         &app,
@@ -156,10 +202,47 @@ async fn first_run_setup_creates_admin_once() {
     )
     .await;
     assert_eq!(again.status, StatusCode::CONFLICT);
-    assert!(state.setup_token().is_none());
 
     let h = call(&app, Method::GET, "/api/health", None, None).await;
     assert_eq!(h.body["setup_required"], false);
+}
+
+#[tokio::test]
+async fn setup_token_guessing_is_rate_limited() {
+    let state = new_state().await;
+    let app = api::router(state.clone());
+    let token = state.issue_setup_token().await.unwrap().unwrap();
+
+    for _ in 0..5 {
+        let r = try_setup(&app, &"f".repeat(64), ADMIN_PW).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN);
+    }
+    // Locked: even the real token is refused until the lock passes.
+    let r = try_setup(&app, &token, ADMIN_PW).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(state.setup_required());
+}
+
+/// A restart must not issue, print or reopen anything by itself.
+#[tokio::test]
+async fn restart_does_not_issue_a_setup_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("home-ai.db");
+    drop(
+        AppState::new(Db::open(&path).unwrap(), PathBuf::from("x"))
+            .await
+            .unwrap(),
+    );
+    let state = AppState::new(Db::open(&path).unwrap(), PathBuf::from("x"))
+        .await
+        .unwrap();
+    assert!(state.setup_required());
+    let rows: i64 = state
+        .db
+        .call(|c| c.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 /// A02
@@ -470,7 +553,7 @@ async fn restart_preserves_users_sessions_and_device_state() {
         .await
         .unwrap();
     assert!(
-        state.setup_token().is_none(),
+        !state.setup_required(),
         "setup must stay closed after restart"
     );
     let app = api::router(state);

@@ -8,7 +8,8 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 
 /// Ordered schema migrations. Append only; never edit an applied entry.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
     CREATE TABLE users (
         id            INTEGER PRIMARY KEY,
         username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -45,7 +46,14 @@ const MIGRATIONS: &[&str] = &["
         detail   TEXT
     );
     CREATE INDEX audit_ts ON audit_log(ts);
-    "];
+    ",
+    "
+    CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    ",
+];
 
 #[derive(Clone)]
 pub struct Db {

@@ -31,6 +31,7 @@ The first vertical slice is written: Rust core in `server/`, Svelte dashboard in
 ```
 cd web && npm ci && npm run build && cd ..
 cargo test --all
+cargo run -- setup-token   # prints the one-time setup token
 cargo run
 ```
-The server listens on `http://127.0.0.1:8080` and prints a single-use setup token on first start. Open that address, create the administrator, sign in. Every device is a simulator. `cargo run -- hwdiag` prints a read-only hardware report. Settings: `APP_LISTEN`, `APP_DATA_DIR` (default `./data`), `APP_WEB_DIR` (default `./web/dist`), `APP_LOG_LEVEL`. The server refuses non-loopback addresses; see `docs/adr/0001-foundation.md` for the TLS plan.
+The server listens on `http://127.0.0.1:8080` . Open that address, enter the token from `setup-token` (valid one hour, single use), create the administrator, sign in. Every device is a simulator. `cargo run -- hwdiag` prints a read-only hardware report. Settings: `APP_LISTEN`, `APP_DATA_DIR` (default `./data`), `APP_WEB_DIR` (default `./web/dist`), `APP_LOG_LEVEL`. The server refuses non-loopback addresses; see `docs/adr/0001-foundation.md` for the TLS plan.

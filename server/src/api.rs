@@ -10,11 +10,10 @@ use axum::{Json, Router};
 use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use subtle::ConstantTimeEq;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::auth::{self, AuthUser};
+use crate::auth::{self, AuthUser, SetupTokenCheck};
 use crate::devices;
 use crate::error::ApiError;
 use crate::events::Event;
@@ -88,7 +87,7 @@ async fn api_guard(req: Request, next: Next) -> Response {
 async fn health(State(s): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
-        "setup_required": s.setup_token().is_some(),
+        "setup_required": s.setup_required(),
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
@@ -103,16 +102,35 @@ struct SetupReq {
 }
 
 async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<Response, ApiError> {
-    let Some(expected) = s.setup_token() else {
+    if !s.setup_required() {
         return Err(ApiError::Conflict(
             "Setup has already been completed.".into(),
         ));
+    }
+    // One shared limiter for all setup attempts: the token cannot be guessed
+    // at speed, whoever is guessing.
+    if let Some(wait) = s.limiter.locked_for(auth::SETUP_LIMIT_KEY) {
+        return Err(ApiError::TooManyRequests(wait));
+    }
+    let supplied = req.setup_token.trim().to_string();
+    let check =
+        s.db.call(move |c| auth::check_setup_token(c, &supplied))
+            .await?;
+    let denial = match check {
+        SetupTokenCheck::Valid => None,
+        SetupTokenCheck::NotIssued => {
+            Some("No setup token has been issued. Run `home-ai setup-token` on the server.")
+        }
+        SetupTokenCheck::Expired => Some(
+            "The setup token has expired. Run `home-ai setup-token` on the server for a new one.",
+        ),
+        SetupTokenCheck::Wrong => Some("Setup token is not valid."),
     };
-    let supplied = req.setup_token.trim();
-    if supplied.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1 {
-        s.audit(None, "setup", None, "denied", Some("wrong setup token"))
+    if let Some(message) = denial {
+        s.limiter.record_failure(auth::SETUP_LIMIT_KEY);
+        s.audit(None, "setup", None, "denied", Some("setup token rejected"))
             .await;
-        return Err(ApiError::Forbidden("Setup token is not valid.".into()));
+        return Err(ApiError::Forbidden(message.into()));
     }
     let username = req.username.trim().to_string();
     auth::validate_username(&username)?;
@@ -127,14 +145,20 @@ async fn setup(State(s): State<AppState>, Json(req): Json<SetupReq>) -> Result<R
     let uname = username.clone();
     let created =
         s.db.call(move |c| {
-            c.execute(
+            let tx = c.transaction()?;
+            let created = tx.execute(
                 "INSERT INTO users (username, password_hash, role, created_at)
                  SELECT ?1, ?2, 'admin', ?3 WHERE NOT EXISTS (SELECT 1 FROM users)",
                 params![uname, hash, now()],
-            )
+            )?;
+            // The token dies in the same transaction that creates the admin.
+            auth::clear_setup_token(&tx)?;
+            tx.commit()?;
+            Ok(created)
         })
         .await?;
-    s.close_setup();
+    s.mark_setup_done();
+    s.limiter.clear(auth::SETUP_LIMIT_KEY);
     if created == 0 {
         return Err(ApiError::Conflict(
             "Setup has already been completed.".into(),

@@ -118,6 +118,92 @@ pub fn cookie_token(headers: &HeaderMap) -> Option<String> {
         .filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+// ---- one-time setup token ---------------------------------------------------
+
+pub const SETUP_TOKEN_TTL_S: i64 = 60 * 60;
+/// Rate-limit key shared by every setup attempt.
+pub const SETUP_LIMIT_KEY: &str = "setup-token";
+const SETUP_HASH_KEY: &str = "setup_token_hash";
+const SETUP_EXPIRES_KEY: &str = "setup_token_expires";
+
+/// Issue a fresh one-time setup token, replacing any earlier one. Only its
+/// hash and expiry are stored. Returns `None` once an administrator exists.
+///
+/// This is reachable only from the `home-ai setup-token` command, which needs
+/// write access to the database file: that is the "authorized local
+/// administrative procedure". The server never issues a token by itself, so a
+/// restart cannot reopen or re-key setup.
+pub fn issue_setup_token(conn: &mut Connection) -> rusqlite::Result<Option<String>> {
+    let tx = conn.transaction()?;
+    let users: i64 = tx.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+    if users > 0 {
+        return Ok(None);
+    }
+    let token = new_token();
+    let expires = (crate::now() + SETUP_TOKEN_TTL_S).to_string();
+    tx.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        params![SETUP_HASH_KEY, token_hash(&token)],
+    )?;
+    tx.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        params![SETUP_EXPIRES_KEY, expires],
+    )?;
+    tx.commit()?;
+    Ok(Some(token))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupTokenCheck {
+    Valid,
+    NotIssued,
+    Expired,
+    Wrong,
+}
+
+fn setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+pub fn check_setup_token(conn: &Connection, supplied: &str) -> rusqlite::Result<SetupTokenCheck> {
+    use subtle::ConstantTimeEq;
+
+    let Some(stored) = setting(conn, SETUP_HASH_KEY)? else {
+        return Ok(SetupTokenCheck::NotIssued);
+    };
+    let expires: i64 = setting(conn, SETUP_EXPIRES_KEY)?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if expires <= crate::now() {
+        return Ok(SetupTokenCheck::Expired);
+    }
+    let supplied_hash = token_hash(supplied);
+    Ok(
+        if supplied_hash
+            .as_bytes()
+            .ct_eq(stored.as_bytes())
+            .unwrap_u8()
+            == 1
+        {
+            SetupTokenCheck::Valid
+        } else {
+            SetupTokenCheck::Wrong
+        },
+    )
+}
+
+/// Remove the token. Call inside the transaction that creates the admin.
+pub fn clear_setup_token(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM settings WHERE key IN (?1, ?2)",
+        params![SETUP_HASH_KEY, SETUP_EXPIRES_KEY],
+    )?;
+    Ok(())
+}
+
 pub fn create_user(
     conn: &Connection,
     username: &str,
