@@ -45,3 +45,21 @@ jobs:
         with:
           name: web-dist
           path: web/dist
+
+  # Runs the built release binary for real: HTTPS, setup token, setup, login,
+  # a device command, and a restart. Simulator only.
+  smoke:
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: home-ai-linux-x86_64-baseline
+          path: out/bin
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: out/web
+      - run: chmod +x out/bin/home-ai
+      - run: bash scripts/smoke.sh out/bin/home-ai out/web

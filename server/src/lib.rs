@@ -9,6 +9,7 @@ pub mod events;
 pub mod hwdiag;
 pub mod metrics;
 pub mod policy;
+pub mod tls;
 pub mod ws;
 
 use std::collections::HashMap;
