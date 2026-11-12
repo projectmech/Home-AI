@@ -216,7 +216,8 @@ HEALTH=$(is_healthy)
 log "Health check: OK"
 
 # ------------------------------------------------------------- 20: report
-ADDR=${HOST_IP:-<this-machine's-address>}
+ADDR=$HOST_IP
+[ -n "$ADDR" ] || ADDR="SERVER-ADDRESS"
 SETUP_TOKEN=""
 case "$HEALTH" in
   *'"setup_required":true'*)

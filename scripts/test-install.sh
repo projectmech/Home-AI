@@ -19,8 +19,26 @@ URL=https://localhost:8443
 PASSWORD='correct horse battery staple'
 JAR=$W/cookies
 
-step() { printf '\n=== %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; sudo journalctl -u home-ai -n 40 --no-pager >&2 || true; exit 1; }
+CURRENT_STEP="start"
+step() { CURRENT_STEP=$*; printf '\n=== %s\n' "$*"; }
+
+# Failures are also emitted as GitHub annotations, which show on the run's
+# summary page without opening the log.
+annotate_tail() {
+  local f
+  f=$(ls -t "$W"/*.log 2>/dev/null | head -n 1 || true)
+  [ -n "$f" ] || return 0
+  printf '::error title=last output (%s)::%s\n' "$(basename "$f")" \
+    "$(tail -n 25 "$f" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+}
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  printf '::error title=install test failed::step "%s": %s\n' "$CURRENT_STEP" "$*"
+  annotate_tail
+  sudo journalctl -u home-ai -n 40 --no-pager >&2 || true
+  exit 1
+}
+trap 'rc=$?; printf "::error title=install test error::step \"%s\", line %s: %s (exit %s)\n" "$CURRENT_STEP" "$LINENO" "$BASH_COMMAND" "$rc"; annotate_tail' ERR
 req()  { curl --silent --show-error --max-time 10 --cacert "$W/cert.pem" "$@"; }
 code() { req --output /dev/null --write-out '%{http_code}' "$@"; }
 healthy() {
@@ -34,7 +52,9 @@ expect_refused() { # <description> <command...>
   local what=$1; shift
   if "$@" > "$W/refused.log" 2>&1; then cat "$W/refused.log"; fail "$what was accepted"; fi
   [ ! -e /opt/home-ai ] || fail "$what left files in /opt/home-ai"
-  echo "refused as expected: $(grep -m1 '^ERROR' "$W/refused.log" || tail -n 1 "$W/refused.log")"
+  # A crash is not a refusal: the script must have stopped on purpose.
+  grep -q '^ERROR: ' "$W/refused.log" || fail "$what: installer stopped without an ERROR message"
+  echo "refused as expected: $(grep -m1 '^ERROR: ' "$W/refused.log")"
 }
 
 step "build signed test bundles with a throwaway key"
