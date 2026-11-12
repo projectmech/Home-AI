@@ -25,7 +25,7 @@ This is a **project context bundle**, not a working home AI application. It capt
 - [Authoritative docs](docs/REFERENCES.md)
 
 ## Current state of the code (2026-11-12)
-The first vertical slice is written: Rust core in `server/`, Svelte dashboard in `web/`. Lint, tests and the baseline release build pass in GitHub Actions. Nobody has run the dashboard against a live server yet, and nothing has run on the Mac mini; see the handoff record in `docs/ROADMAP.md`. There is no installer yet (`prompts/06`, roadmap M1b).
+The first vertical slice is written: Rust core in `server/`, Svelte dashboard in `web/`. Lint, tests and the baseline release build pass in GitHub Actions. Nobody has run the dashboard against a live server yet, and nothing has run on the Mac mini; see the handoff record in `docs/ROADMAP.md`. Installing on a server: see `docs/INSTALL.md`. No release is published yet.
 
 ## Build and run (on a machine that can run locally compiled programs)
 ```

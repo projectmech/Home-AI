@@ -63,3 +63,22 @@ jobs:
           path: out/web
       - run: chmod +x out/bin/home-ai
       - run: bash scripts/smoke.sh out/bin/home-ai out/web
+
+  # Real install on a throwaway runner with systemd: bad bundles refused,
+  # install, setup, crash recovery, update, rollback, uninstall, purge.
+  install:
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: home-ai-linux-x86_64-baseline
+          path: out/bin
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: out/web
+      - run: chmod +x out/bin/home-ai
+      - run: bash -n install.sh && bash -n update.sh && bash -n uninstall.sh && bash -n packaging/lib.sh
+      - run: bash scripts/test-install.sh out/bin/home-ai out/web

@@ -1,0 +1,40 @@
+[Unit]
+Description=Home AI server
+Documentation=file:///opt/home-ai/VERSION
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=home-ai
+Group=home-ai
+EnvironmentFile=/etc/home-ai/home-ai.env
+ExecStart=/opt/home-ai/bin/home-ai
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+
+# Least privilege: no root, no new privileges, read-only system, one writable directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/home-ai
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# Keep the core from starving a two-core machine or filling its RAM.
+MemoryMax=1G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
