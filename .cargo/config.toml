@@ -1,0 +1,8 @@
+# Deployment target is a Core 2 Duo (Macmini4,1). Build Linux release binaries for
+# the original x86-64 baseline only: no AVX/AVX2, no x86-64-v2/v3. Never use
+# target-cpu=native here.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-cpu=x86-64"]

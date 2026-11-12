@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins the version and components.
+      - run: rustup show
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      # Release build for the Core 2 Duo baseline (.cargo/config.toml sets
+      # target-cpu=x86-64). A real Mac mini smoke test is still required.
+      - run: cargo build --release --target x86_64-unknown-linux-gnu
+      - run: ./target/x86_64-unknown-linux-gnu/release/home-ai hwdiag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: home-ai-linux-x86_64-baseline
+          path: target/x86_64-unknown-linux-gnu/release/home-ai
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
