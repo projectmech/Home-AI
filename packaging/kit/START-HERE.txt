@@ -1,0 +1,66 @@
+HOME AI - USB INSTALL KIT          release @VERSION@
+======================================================================
+
+This stick installs Home AI on a Linux server (Debian or Ubuntu, 64-bit,
+systemd). It was built for the Mac mini running Ubuntu Server.
+
+It contains:
+  home-ai-@VERSION@-linux-x86_64.tar.gz            the program and dashboard
+  home-ai-@VERSION@-linux-x86_64.tar.gz.sigstore.json   proof of where it came from
+  cosign-linux-amd64                          the tool that checks that proof
+  get.sh, start.sh                            the installer scripts
+  START-HERE.txt                              this file
+
+It does NOT contain Ubuntu itself, passwords, tokens or any keys.
+
+WHAT YOU NEED
+  - The server, already running Ubuntu Server (or Debian), with a keyboard
+    and screen, or an SSH login.
+  - Internet on the server. Checking the release contacts Sigstore's public
+    service. Without internet the install stops and installs nothing.
+  - About 1 GB of free disk space.
+
+STEPS (type these on the server)
+
+  1. Plug the stick in, then find it:
+
+         lsblk -f
+
+     Look for the stick (about the size you bought), for example sdb1.
+     Do not use the drive that holds "/" - that is the server's own disk.
+
+  2. Mount it (replace sdb1 with what you found):
+
+         sudo mkdir -p /mnt/kit
+         sudo mount /dev/sdb1 /mnt/kit
+
+  3. Start the install:
+
+         sudo bash /mnt/kit/start.sh
+
+  4. When it finishes it prints:
+       - the web address (https://<server address>:8443),
+       - a one-time setup token (valid 60 minutes),
+       - a certificate fingerprint.
+     Open the setup address on another computer on the same network,
+     check the fingerprint against the browser warning, and use the token.
+
+  5. Remove the stick safely:
+
+         sudo umount /mnt/kit
+
+IF SOMETHING GOES WRONG
+  - If the checks fail, the installer refuses and says why. Nothing is
+    installed when a check refuses.
+  - "Release verification FAILED": the files on this stick were changed or
+    damaged. Rebuild the kit; do not install.
+  - A lost or expired token:  sudo home-ai setup-token
+  - More: https://github.com/projectmech/Home-AI  (docs/INSTALL.md)
+
+ABOUT TRUST
+  The checking tool on this stick is verified against a fixed checksum before
+  it is used. The program is accepted only if its Sigstore proof shows it was
+  built by the release workflow of github.com/projectmech/Home-AI. The two
+  scripts (get.sh, start.sh) on this stick are NOT covered by that proof: they
+  come from whoever made the stick, so keep it with you and rebuild it from
+  your own GitHub account if you are unsure.

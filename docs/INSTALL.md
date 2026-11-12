@@ -38,6 +38,16 @@ curl -fsSL https://raw.githubusercontent.com/projectmech/Home-AI/main/get.sh -o 
 ```
 Piping straight into `sudo bash` also works but gives you no chance to read the script first. Options: `--version v0.1.1` for a specific release, `--force-distro` for a system other than Debian or Ubuntu.
 
+## USB install kit
+A stick that carries everything the install needs, so you type almost nothing on the server. It contains the signed release, the checksum-pinned verifier, `get.sh` and a `START-HERE.txt`. It does not contain Ubuntu itself and no keys or tokens. The server still needs internet: checking a release contacts Sigstore.
+
+The kit is built and tested by the **USB kit** workflow: it assembles the newest release, installs from the kit for real on a throwaway runner, checks health, removes it, and only then uploads the kit. To get it:
+1. Open the repository's Actions tab, choose the newest successful **USB kit** run, and download the artifact `home-ai-usb-kit` (sign-in required while the repository is private).
+2. Unzip it and copy **all** the files onto a USB stick formatted FAT32 or exFAT (the default for most sticks). About 150 MB.
+3. On the server follow `START-HERE.txt`: find the stick with `lsblk -f`, mount it, run `sudo bash /mnt/kit/start.sh`.
+
+`start.sh` runs `get.sh --from <kit folder>`: the same verification as every other install path, with no download of the release. The two scripts on the stick are not covered by the release signature; they are only as trustworthy as the account that built the stick.
+
 ## Install
 The repository is private, so the server cannot download from GitHub anonymously. Two ways:
 

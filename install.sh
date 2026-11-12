@@ -115,7 +115,9 @@ HOST_NAME=$(hostname 2>/dev/null || echo "")
 if [ -n "$RELEASE_TAG" ]; then
   step "Finding release '$RELEASE_TAG' on github.com/$GITHUB_REPO"
   API="https://api.github.com/repos/$GITHUB_REPO"
-  if [ "$RELEASE_TAG" = "latest" ]; then RELEASE_URL="$API/releases/latest"
+  # "latest" means the newest published release, pre-release or not. GitHub's
+  # own /releases/latest ignores pre-releases and can point at an old version.
+  if [ "$RELEASE_TAG" = "latest" ]; then RELEASE_URL="$API/releases?per_page=10"
   else RELEASE_URL="$API/releases/tags/$RELEASE_TAG"
   fi
   AUTH=()
@@ -145,6 +147,16 @@ Either no such release has been published yet, or the token cannot read $GITHUB_
 A fine-grained token needs: Repository access = this repository, Permissions = Contents: Read-only." ;;
       *) die "Could not reach GitHub (HTTP ${HTTP:-none}). Check this machine's internet connection." ;;
     esac
+  fi
+  if [ "$RELEASE_TAG" = "latest" ]; then
+    RELEASE_TAG=$(awk '
+      /^    "tag_name": *"/ { split($0, p, "\""); tag = p[4] }
+      /^    "draft": *false/ { if (tag != "") { print tag; exit } }
+    ' "$TMP/release.json")
+    [ -n "$RELEASE_TAG" ] || die "No published release was found on github.com/$GITHUB_REPO."
+    RELEASE_URL="$API/releases/tags/$RELEASE_TAG"
+    HTTP=$(fetch_release)
+    [ "$HTTP" = "200" ] || die "Could not read release $RELEASE_TAG (HTTP ${HTTP:-none})."
   fi
   TAG_NAME=$(awk -F'"' '/"tag_name": *"/ { print $4; exit }' "$TMP/release.json")
   log "Release: ${TAG_NAME:-$RELEASE_TAG}"

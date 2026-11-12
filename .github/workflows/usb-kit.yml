@@ -1,0 +1,53 @@
+name: USB kit
+
+# Builds the USB install kit from the newest published release and proves it
+# works by installing from it for real on a throwaway runner. The kit is
+# uploaded as the artifact "home-ai-usb-kit": download it from this run's page,
+# unzip, and copy the files onto a USB stick (FAT32 or exFAT).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - get.sh
+      - install.sh
+      - packaging/**
+      - scripts/make-kit.sh
+      - .github/workflows/usb-kit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the kit from the newest published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-run.sh make-kit bash scripts/make-kit.sh kit
+
+      - run: bash -n kit/get.sh && bash -n kit/start.sh
+
+      # The same command a user types, with the kit folder as it will be on the stick.
+      - name: Install from the kit for real
+        run: bash scripts/ci-run.sh kit-install sudo bash kit/start.sh
+
+      - name: The installed server is healthy and set-up is open
+        run: |
+          sudo cat /var/lib/home-ai/tls/cert.pem > cert.pem
+          curl --silent --fail --cacert cert.pem https://localhost:8443/api/health | tee health.json
+          grep -q '"setup_required":true' health.json
+          systemctl is-active --quiet home-ai
+
+      - name: Remove it again
+        run: sudo bash uninstall.sh --purge --yes
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: home-ai-usb-kit
+          path: kit
+          if-no-files-found: error
+          retention-days: 30
