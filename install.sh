@@ -23,13 +23,14 @@ FORCE_DISTRO=0
 
 usage() {
   cat <<EOF
-Usage: sudo ./install.sh (--bundle FILE | --version TAG) [options]
+Usage: sudo ./install.sh [--version TAG | --bundle FILE] [options]
 
-  --bundle FILE               Install from a release bundle on disk. SHA256SUMS and
-                              SHA256SUMS.sig must be in the same folder.
-  --version TAG               Download release TAG (for example v0.1.0) from GitHub.
-                              The repository is private, so this asks for a read-only
-                              GitHub token. The token is not saved.
+  (no arguments)              Download and install the latest release from GitHub.
+  --version TAG               Download release TAG (for example v0.1.0) instead.
+                              While the repository is private, downloading asks for
+                              a read-only GitHub token. The token is not saved.
+  --bundle FILE               Install from a release bundle already on disk.
+                              SHA256SUMS and SHA256SUMS.sig must be in the same folder.
   --force-distro              Continue on a distribution other than Debian or Ubuntu.
   --insecure-skip-signature   Install without verifying who built the bundle.
   -h, --help                  Show this help.
@@ -48,7 +49,8 @@ while [ $# -gt 0 ]; do
 done
 
 need_root "$@"
-[ -n "$BUNDLE" ] || [ -n "$RELEASE_TAG" ] || { usage >&2; die "Give --bundle FILE or --version TAG."; }
+# With no arguments: the latest published release.
+[ -n "$BUNDLE" ] || [ -n "$RELEASE_TAG" ] || RELEASE_TAG=latest
 [ -z "$BUNDLE" ] || [ -z "$RELEASE_TAG" ] || die "Give only one of --bundle and --version."
 
 TMP=$(mktemp -d)
@@ -115,16 +117,41 @@ HOST_NAME=$(hostname 2>/dev/null || echo "")
 
 # ------------------------------------------------- 9-10: obtain and verify
 if [ -n "$RELEASE_TAG" ]; then
-  step "Downloading release $RELEASE_TAG from github.com/$GITHUB_REPO"
-  [ -r /dev/tty ] || die "No terminal to ask for the GitHub token. Download the bundle yourself and use --bundle."
-  printf 'GitHub token with read access to %s (input hidden, not saved): ' "$GITHUB_REPO" > /dev/tty
-  IFS= read -rs GH_TOKEN < /dev/tty; printf '\n' > /dev/tty
-  [ -n "$GH_TOKEN" ] || die "No token entered."
+  step "Finding release '$RELEASE_TAG' on github.com/$GITHUB_REPO"
   API="https://api.github.com/repos/$GITHUB_REPO"
-  curl --silent --show-error --fail --max-time 30 \
-    -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-    "$API/releases/tags/$RELEASE_TAG" -o "$TMP/release.json" \
-    || die "Could not read release $RELEASE_TAG. Check the tag, the token and its access to the repository."
+  if [ "$RELEASE_TAG" = "latest" ]; then RELEASE_URL="$API/releases/latest"
+  else RELEASE_URL="$API/releases/tags/$RELEASE_TAG"
+  fi
+  AUTH=()
+  fetch_release() {
+    curl --silent --show-error --max-time 30 --output "$TMP/release.json" --write-out '%{http_code}' \
+      "${AUTH[@]}" -H "Accept: application/vnd.github+json" "$RELEASE_URL" || true
+  }
+  HTTP=$(fetch_release)
+  if [ "$HTTP" != "200" ]; then
+    # A private repository answers anonymous requests exactly like a missing one.
+    GH_TOKEN=${HOME_AI_GITHUB_TOKEN:-}
+    if [ -z "$GH_TOKEN" ]; then
+      log "GitHub did not return the release without signing in (HTTP ${HTTP:-none})."
+      log "If the repository is private, a token with read access is needed."
+      [ -r /dev/tty ] || die "No terminal to ask for a token. Set HOME_AI_GITHUB_TOKEN, or download the bundle yourself and use --bundle."
+      printf 'GitHub token for %s (input hidden, not saved): ' "$GITHUB_REPO" > /dev/tty
+      IFS= read -rs GH_TOKEN < /dev/tty; printf '\n' > /dev/tty
+      [ -n "$GH_TOKEN" ] || die "No token entered."
+    fi
+    AUTH=(-H "Authorization: Bearer $GH_TOKEN")
+    HTTP=$(fetch_release)
+    case "$HTTP" in
+      200) ;;
+      401) die "GitHub rejected the token (HTTP 401). Check that it was copied completely and has not expired." ;;
+      404) die "Release '$RELEASE_TAG' was not found (HTTP 404).
+Either no such release has been published yet, or the token cannot read $GITHUB_REPO.
+A fine-grained token needs: Repository access = this repository, Permissions = Contents: Read-only." ;;
+      *) die "Could not reach GitHub (HTTP ${HTTP:-none}). Check this machine's internet connection." ;;
+    esac
+  fi
+  TAG_NAME=$(awk -F'"' '/"tag_name": *"/ { print $4; exit }' "$TMP/release.json")
+  log "Release: ${TAG_NAME:-$RELEASE_TAG}"
   # Pairs of "<asset api url> <asset name>".
   awk -F'"' '
     /"url": *"[^"]*\/releases\/assets\/[0-9]+"/ { url = $4 }
@@ -140,11 +167,11 @@ if [ -n "$RELEASE_TAG" ]; then
     esac
     case "$name" in */*|..*) die "Refusing odd asset name: $name" ;; esac
     curl --silent --show-error --fail --location --max-time 300 \
-      -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+      "${AUTH[@]}" -H "Accept: application/octet-stream" \
       "$url" -o "$TMP/dl/$name" || die "Download of $name failed."
     log "Downloaded $name"
   done < "$TMP/assets.txt"
-  unset GH_TOKEN
+  unset GH_TOKEN AUTH
   [ "$FOUND" = "1" ] || die "Release $RELEASE_TAG has no linux-x86_64 bundle. No compatible binary is available; nothing will be compiled here."
 fi
 

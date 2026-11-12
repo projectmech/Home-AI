@@ -159,10 +159,15 @@ async fn setup_verify(
     let m = tokio::task::spawn_blocking(move || st.metrics.collect())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let os = [m.os_name.clone(), m.os_version.clone()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
     Ok(Json(json!({
         "server": {
             "host_name": m.host_name,
-            "os": [m.os_name, m.os_version].into_iter().flatten().collect::<Vec<_>>().join(" "),
+            "os": os,
             "cpu_model": m.cpu_model,
             "logical_cores": m.logical_cores,
             "mem_total_bytes": m.mem_total_bytes,
