@@ -2,11 +2,12 @@
 # Build a release bundle from an already-built binary and frontend.
 # Usage: scripts/package.sh <home-ai-binary> <web-dist-dir> <output-dir>
 #
-# Produces in <output-dir>:
-#   home-ai-<version>-linux-x86_64.tar.gz   binary, web/, VERSION
-#   SHA256SUMS                              checksum of the tarball
-#   SHA256SUMS.sig                          Ed25519 signature of SHA256SUMS,
-#                                           only if RELEASE_SIGNING_KEY_FILE is set
+# Produces <output-dir>/home-ai-<version>-linux-x86_64.tar.gz (binary, web/,
+# VERSION) and prints its path on the last line.
+#
+# Signing is NOT done here. Real releases are signed with Sigstore in the
+# Release workflow (scripts/release-sign.sh). For CI install tests only,
+# TEST_SIGNING_KEY_FILE adds a throwaway-key signature as <bundle>.testsig.
 set -euo pipefail
 
 BIN=$(readlink -f "${1:?usage: package.sh <binary> <web-dist> <out-dir>}")
@@ -30,14 +31,10 @@ printf '%s\n' "$VERSION" > "$STAGE/$NAME/VERSION"
 OUT=$(readlink -f "$OUT")
 # Fixed owner and order so the same inputs give the same archive.
 tar --sort=name --owner=0 --group=0 --numeric-owner -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"
-( cd "$OUT" && sha256sum "$NAME.tar.gz" > SHA256SUMS )
 
-if [ -n "${RELEASE_SIGNING_KEY_FILE:-}" ]; then
-  openssl pkeyutl -sign -rawin -inkey "$RELEASE_SIGNING_KEY_FILE" \
-    -in "$OUT/SHA256SUMS" -out "$OUT/SHA256SUMS.sig"
-  echo "signed: $OUT/SHA256SUMS.sig"
-else
-  echo "RELEASE_SIGNING_KEY_FILE not set: bundle is NOT signed" >&2
+if [ -n "${TEST_SIGNING_KEY_FILE:-}" ]; then
+  openssl pkeyutl -sign -rawin -inkey "$TEST_SIGNING_KEY_FILE" \
+    -in "$OUT/$NAME.tar.gz" -out "$OUT/$NAME.tar.gz.testsig"
 fi
 
 echo "$OUT/$NAME.tar.gz"

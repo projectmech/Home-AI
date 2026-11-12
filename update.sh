@@ -13,17 +13,15 @@ REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=packaging/lib.sh
 . "$REPO_DIR/packaging/lib.sh"
 
-PUBKEY=${HOME_AI_PUBKEY:-$REPO_DIR/packaging/release-signing.pub.pem}
 BUNDLE=""
-ALLOW_UNSIGNED=0
 ROLLBACK=0
 
 usage() {
   cat <<EOF
-Usage: sudo ./update.sh --bundle FILE [--insecure-skip-signature]
+Usage: sudo ./update.sh --bundle FILE
        sudo ./update.sh --rollback
 
-  --bundle FILE   Release bundle; SHA256SUMS and SHA256SUMS.sig beside it.
+  --bundle FILE   Release bundle, with its .sigstore.json file beside it.
   --rollback      Go back to the version and database from before the last update.
 EOF
 }
@@ -32,7 +30,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --bundle) BUNDLE=${2:-}; shift 2 ;;
     --rollback) ROLLBACK=1; shift ;;
-    --insecure-skip-signature) ALLOW_UNSIGNED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "Unknown option: $1" ;;
   esac
@@ -40,7 +37,7 @@ done
 
 need_root "$@"
 [ -d "$PREFIX" ] || die "Home AI is not installed. Use install.sh first."
-need_commands systemctl curl openssl tar sha256sum install
+need_commands systemctl curl tar sha256sum install awk
 
 BACKUP_ROOT=$DATA_DIR/backups
 LAST_BACKUP_LINK=$BACKUP_ROOT/last-pre-update
@@ -84,7 +81,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 step "Verifying the release bundle"
-verify_bundle "$BUNDLE" "$PUBKEY" "$ALLOW_UNSIGNED"
+verify_bundle "$BUNDLE"
 SRC=$(extract_bundle "$BUNDLE" "$TMP")
 check_binary_runs "$SRC"
 OLD_VERSION=$(installed_version)

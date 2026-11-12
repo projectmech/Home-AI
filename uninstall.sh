@@ -42,7 +42,7 @@ log "Removed program files and the service."
 
 if [ "$PURGE" = "1" ]; then
   step "Deleting data and settings"
-  rm -rf "$DATA_DIR" "$ETC_DIR"
+  rm -rf "$DATA_DIR" "$ETC_DIR" "$TOOLS_DIR"
   if id "$SVC_USER" >/dev/null 2>&1; then userdel "$SVC_USER" >/dev/null 2>&1 || true; fi
   log "Deleted $DATA_DIR, $ETC_DIR and the '$SVC_USER' account."
 else

@@ -1,14 +1,22 @@
 name: Release
 
 # Runs when a version tag (v1.2.3) is pushed. Builds the Core 2 Duo baseline
-# binary and the frontend, packages and signs them, and publishes a GitHub
-# release. Needs the repository secret RELEASE_SIGNING_KEY (docs/INSTALL.md).
+# binary and the frontend, packages them, signs the bundle with Sigstore
+# keyless signing, installs it for real to prove the installer accepts it, and
+# publishes a GitHub release.
+#
+# No signing key is stored anywhere. Sigstore issues a short-lived certificate
+# to this workflow's GitHub OIDC identity, and install.sh accepts only bundles
+# signed by this file, in this repository, on a version tag
+# (RELEASE_IDENTITY_REGEXP in packaging/lib.sh). Renaming this file, the
+# repository or its owner requires updating that expression first.
 on:
   push:
-    tags: ['v*']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
-  contents: write
+  contents: write   # create the release
+  id-token: write   # GitHub OIDC token for Sigstore
 
 jobs:
   release:
@@ -16,59 +24,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Refuse to release without a signing key
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        run: |
-          if [ -z "$RELEASE_SIGNING_KEY" ]; then
-            echo "::error::Secret RELEASE_SIGNING_KEY is not set. See docs/INSTALL.md."
-            exit 1
-          fi
-          test -f packaging/release-signing.pub.pem || {
-            echo "::error::packaging/release-signing.pub.pem is missing from the repository."
-            exit 1
-          }
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci && npm run check && npm run build
+      - run: npm ci
+        working-directory: web
+      - run: bash ../scripts/ci-run.sh svelte-check npm run check
+        working-directory: web
+      - run: npm run build
         working-directory: web
 
       - run: rustup show
-      - run: cargo test --all
-      - run: cargo build --release --target x86_64-unknown-linux-gnu
+      - run: bash scripts/ci-run.sh test cargo test --all
+      - run: bash scripts/ci-run.sh release-build cargo build --release --target x86_64-unknown-linux-gnu
 
       - name: Tag must match the binary's version
         run: |
           BIN=target/x86_64-unknown-linux-gnu/release/home-ai
           VERSION=$("$BIN" version | awk '{print $2}')
           if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo version $VERSION."
+            echo "::error::Tag $GITHUB_REF_NAME does not match the version in server/Cargo.toml ($VERSION)."
             exit 1
           fi
 
-      - run: bash scripts/smoke.sh target/x86_64-unknown-linux-gnu/release/home-ai web/dist
+      - run: bash scripts/ci-run.sh smoke bash scripts/smoke.sh target/x86_64-unknown-linux-gnu/release/home-ai web/dist
 
-      - name: Package and sign
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+      - name: Package
+        run: bash scripts/package.sh target/x86_64-unknown-linux-gnu/release/home-ai web/dist dist
+
+      - name: Sign with Sigstore (keyless) and verify as the installer does
+        run: bash scripts/ci-run.sh sign bash scripts/release-sign.sh dist/home-ai-*-linux-x86_64.tar.gz
+
+      # sudo does not pass CI=true, so this is the production verification path.
+      - name: Install the signed bundle for real, then remove it
         run: |
-          umask 077
-          KEY=$(mktemp)
-          trap 'rm -f "$KEY"' EXIT
-          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$KEY"
-          RELEASE_SIGNING_KEY_FILE="$KEY" bash scripts/package.sh \
-            target/x86_64-unknown-linux-gnu/release/home-ai web/dist dist
-          # The signature must verify with the public key in the repository.
-          openssl pkeyutl -verify -pubin -inkey packaging/release-signing.pub.pem \
-            -rawin -in dist/SHA256SUMS -sigfile dist/SHA256SUMS.sig
+          bash scripts/ci-run.sh install sudo ./install.sh --bundle "$(ls dist/home-ai-*-linux-x86_64.tar.gz)"
+          systemctl is-active --quiet home-ai
+          sudo ./uninstall.sh --purge --yes
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.sig \
+          gh release create "$GITHUB_REF_NAME" \
+            dist/home-ai-*-linux-x86_64.tar.gz \
+            dist/home-ai-*-linux-x86_64.tar.gz.sigstore.json \
             --title "$GITHUB_REF_NAME" --generate-notes

@@ -4,7 +4,7 @@
 #   sudo ./install.sh --bundle /path/to/home-ai-<version>-linux-x86_64.tar.gz
 #   sudo ./install.sh --version v0.1.0        # downloads the release; asks for a GitHub token
 #
-# It installs a prebuilt, signed release. It never compiles anything, never
+# It installs a prebuilt release after verifying its Sigstore signature. It never compiles anything, never
 # touches disks or boot settings, and never creates a default password.
 # Existing settings, data and certificate are always kept. If Home AI is
 # already running it refuses and points to update.sh.
@@ -14,11 +14,9 @@ REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=packaging/lib.sh
 . "$REPO_DIR/packaging/lib.sh"
 
-PUBKEY=${HOME_AI_PUBKEY:-$REPO_DIR/packaging/release-signing.pub.pem}
 GITHUB_REPO=${HOME_AI_REPO:-projectmech/Home-AI}
 BUNDLE=""
 RELEASE_TAG=""
-ALLOW_UNSIGNED=0
 FORCE_DISTRO=0
 
 usage() {
@@ -30,9 +28,8 @@ Usage: sudo ./install.sh [--version TAG | --bundle FILE] [options]
                               While the repository is private, downloading asks for
                               a read-only GitHub token. The token is not saved.
   --bundle FILE               Install from a release bundle already on disk.
-                              SHA256SUMS and SHA256SUMS.sig must be in the same folder.
+                              Its .sigstore.json file must be in the same folder.
   --force-distro              Continue on a distribution other than Debian or Ubuntu.
-  --insecure-skip-signature   Install without verifying who built the bundle.
   -h, --help                  Show this help.
 EOF
 }
@@ -42,7 +39,6 @@ while [ $# -gt 0 ]; do
     --bundle) BUNDLE=${2:-}; shift 2 ;;
     --version) RELEASE_TAG=${2:-}; shift 2 ;;
     --force-distro) FORCE_DISTRO=1; shift ;;
-    --insecure-skip-signature) ALLOW_UNSIGNED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; die "Unknown option: $1" ;;
   esac
@@ -107,7 +103,7 @@ esac
 log "System drive: ${ROOT_DISK:-unknown}, type: $DRIVE_TYPE"
 
 [ -d /run/systemd/system ] || die "systemd is not running. Home AI is installed as a systemd service."
-need_commands systemctl curl openssl tar sha256sum ip runuser useradd findmnt lsblk install
+need_commands systemctl curl tar sha256sum ip runuser useradd findmnt lsblk install awk
 
 HOST_IP=$(lan_ip)
 if [ -n "$HOST_IP" ]; then log "Network: address $HOST_IP"
@@ -162,7 +158,7 @@ A fine-grained token needs: Repository access = this repository, Permissions = C
   while read -r url name; do
     case "$name" in
       home-ai-*-linux-x86_64.tar.gz) BUNDLE="$TMP/dl/$name"; FOUND=1 ;;
-      SHA256SUMS|SHA256SUMS.sig) ;;
+      home-ai-*-linux-x86_64.tar.gz.sigstore.json) ;;
       *) continue ;;
     esac
     case "$name" in */*|..*) die "Refusing odd asset name: $name" ;; esac
@@ -176,7 +172,7 @@ A fine-grained token needs: Repository access = this repository, Permissions = C
 fi
 
 step "Verifying the release bundle"
-verify_bundle "$BUNDLE" "$PUBKEY" "$ALLOW_UNSIGNED"
+verify_bundle "$BUNDLE"
 mkdir -p "$TMP/x"
 SRC=$(extract_bundle "$BUNDLE" "$TMP/x")
 NEW_VERSION=$(cat "$SRC/VERSION")

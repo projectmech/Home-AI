@@ -4,7 +4,9 @@
 # systemd service and files under /opt, /etc and /var/lib, and removes them.
 #
 # Usage: scripts/test-install.sh <home-ai-binary> <web-dist-dir>
-# Needs passwordless sudo and systemd. Signs test bundles with a throwaway key.
+# Needs passwordless sudo and systemd. Test bundles are signed with a throwaway
+# key through the scripts' CI-only test hook; real Sigstore signing and its
+# verification are exercised by the Release workflow (scripts/release-sign.sh).
 set -euo pipefail
 
 [ "${CI:-}" = "true" ] || { echo "Refusing to run outside CI (set CI=true to override)." >&2; exit 1; }
@@ -57,12 +59,12 @@ expect_refused() { # <description> <command...>
   echo "refused as expected: $(grep -m1 '^ERROR: ' "$W/refused.log")"
 }
 
-step "build signed test bundles with a throwaway key"
+step "build test bundles signed with a throwaway key"
 openssl genpkey -algorithm ed25519 -out "$W/key.pem"
 openssl pkey -in "$W/key.pem" -pubout -out "$W/pub.pem"
 openssl genpkey -algorithm ed25519 -out "$W/other.pem"
 openssl pkey -in "$W/other.pem" -pubout -out "$W/other.pub.pem"
-GOOD=$(RELEASE_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$BIN" "$WEB" "$W/good" | tail -n 1)
+GOOD=$(TEST_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$BIN" "$WEB" "$W/good" | tail -n 1)
 VERSION=$("$BIN" version | awk '{print $2}')
 
 # A "release" that reports a version but cannot serve: for the rollback test.
@@ -72,27 +74,34 @@ cat > "$W/broken-home-ai" <<'EOF'
 exit 1
 EOF
 chmod +x "$W/broken-home-ai"
-BROKEN=$(RELEASE_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$W/broken-home-ai" "$WEB" "$W/broken" | tail -n 1)
+BROKEN=$(TEST_SIGNING_KEY_FILE=$W/key.pem bash scripts/package.sh "$W/broken-home-ai" "$WEB" "$W/broken" | tail -n 1)
 
-INSTALL=(sudo "HOME_AI_PUBKEY=$W/pub.pem" ./install.sh)
-UPDATE=(sudo "HOME_AI_PUBKEY=$W/pub.pem" ./update.sh)
+# sudo drops the environment, so the CI test hook has to be passed explicitly.
+# Without these two variables the scripts use the production Sigstore path.
+INSTALL=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" ./install.sh)
+UPDATE=(sudo CI=true "HOME_AI_TEST_PUBKEY=$W/pub.pem" ./update.sh)
 
-step "bundles that cannot be verified are refused, and nothing is installed"
-expect_refused "bundle with no public key in the repository" \
-  sudo "HOME_AI_PUBKEY=$W/absent.pem" ./install.sh --bundle "$GOOD"
+step "production path: a bundle with no Sigstore evidence is refused"
+expect_refused "bundle without .sigstore.json" sudo ./install.sh --bundle "$GOOD"
+
+step "production path: forged evidence is refused by the pinned cosign"
+cp -r "$W/good" "$W/forged"
+printf '{}\n' > "$W/forged/$(basename "$GOOD").sigstore.json"
+expect_refused "bundle with forged Sigstore evidence" sudo ./install.sh --bundle "$W/forged/$(basename "$GOOD")"
+COSIGN_BIN=$(ls /usr/local/lib/home-ai/cosign-v* 2>/dev/null | head -n 1)
+[ -n "$COSIGN_BIN" ] || fail "the pinned cosign was not fetched"
+PINNED=$(sed -n 's/^COSIGN_SHA256=//p' packaging/lib.sh)
+[ "$(sha256sum "$COSIGN_BIN" | awk '{print $1}')" = "$PINNED" ] || fail "installed cosign does not match the pinned checksum"
+
+step "test path: bundles that fail the signature check are refused"
 expect_refused "bundle signed by a different key" \
-  sudo "HOME_AI_PUBKEY=$W/other.pub.pem" ./install.sh --bundle "$GOOD"
+  sudo CI=true "HOME_AI_TEST_PUBKEY=$W/other.pub.pem" ./install.sh --bundle "$GOOD"
 
-cp -r "$W/good" "$W/nosig"; rm "$W/nosig/SHA256SUMS.sig"
-expect_refused "unsigned bundle" "${INSTALL[@]}" --bundle "$W/nosig/$(basename "$GOOD")"
+cp -r "$W/good" "$W/nosig"; rm "$W/nosig/$(basename "$GOOD").testsig"
+expect_refused "bundle with no signature" "${INSTALL[@]}" --bundle "$W/nosig/$(basename "$GOOD")"
 
 cp -r "$W/good" "$W/altered"; printf 'x' >> "$W/altered/$(basename "$GOOD")"
-expect_refused "altered bundle (checksum)" "${INSTALL[@]}" --bundle "$W/altered/$(basename "$GOOD")"
-
-cp -r "$W/altered" "$W/resummed"
-( cd "$W/resummed" && sha256sum "$(basename "$GOOD")" > SHA256SUMS )
-expect_refused "altered bundle with a rewritten checksum (signature)" \
-  "${INSTALL[@]}" --bundle "$W/resummed/$(basename "$GOOD")"
+expect_refused "altered bundle" "${INSTALL[@]}" --bundle "$W/altered/$(basename "$GOOD")"
 
 step "install"
 "${INSTALL[@]}" --bundle "$GOOD" | tee "$W/install.log"
@@ -176,7 +185,7 @@ req -b "$JAR" "$URL/api/devices" | grep -q '"brightness":37' || fail "state lost
 
 step "uninstall --purge removes everything"
 sudo ./uninstall.sh --purge --yes
-for path in /opt/home-ai /etc/home-ai /var/lib/home-ai /usr/local/bin/home-ai /etc/systemd/system/home-ai.service; do
+for path in /opt/home-ai /etc/home-ai /var/lib/home-ai /usr/local/lib/home-ai /usr/local/bin/home-ai /etc/systemd/system/home-ai.service; do
   sudo test ! -e "$path" || fail "$path still exists after purge"
 done
 if id home-ai > /dev/null 2>&1; then fail "service account still exists after purge"; fi

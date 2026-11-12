@@ -1,12 +1,12 @@
 # Installing, updating and recovering Home AI
 
-Status, 2026-11-12: the scripts below are exercised by CI on a GitHub Ubuntu runner with real systemd (`scripts/test-install.sh`). They have **not** been run on Debian 13 or on the Mac mini. No release has been published yet, because the release signing key does not exist yet (see the end of this page).
+Status, 2026-11-12: the scripts below are exercised by CI on a GitHub Ubuntu runner with real systemd (`scripts/test-install.sh`). They have **not** been run on Debian 13 or on the Mac mini. No release has been published yet, so the download path and the Sigstore signing step have never run.
 
 The terminal is for installing and for emergencies. Everything else is meant to happen in the web interface; today that covers creating the administrator, signing in, device control, server metrics and the activity log. The rest of the setup wizard is not built yet.
 
 ## What the installer does and does not do
 - Installs a **prebuilt, signed** release. It never compiles anything on the server.
-- Refuses a bundle whose signature or checksum does not verify, and refuses a binary that does not run on this CPU.
+- Refuses a bundle that is not proven to come from this repository's release workflow, and refuses a binary that does not run on this CPU.
 - Creates a `home-ai` system account with no login and no password. Never creates a default administrator.
 - Does not partition, format, or change boot or firmware settings.
 
@@ -22,7 +22,7 @@ The terminal is for installing and for emergencies. Everything else is meant to 
 The repository is private, so the server cannot download from GitHub anonymously. Two ways:
 
 **A. Copy a bundle to the server (works without giving the server any GitHub access).**
-On any computer, open the repository's Releases page in a browser and download three files from one release: `home-ai-<version>-linux-x86_64.tar.gz`, `SHA256SUMS`, `SHA256SUMS.sig`. Copy them, and a copy of this repository, to the server. Then:
+On any computer, open the repository's Releases page in a browser and download two files from one release: `home-ai-<version>-linux-x86_64.tar.gz` and `home-ai-<version>-linux-x86_64.tar.gz.sigstore.json`. Copy them, and a copy of this repository, to the server, keeping the two files in the same folder. Then:
 ```
 cd Home-AI
 sudo ./install.sh --bundle /path/to/home-ai-<version>-linux-x86_64.tar.gz
@@ -32,9 +32,9 @@ sudo ./install.sh --bundle /path/to/home-ai-<version>-linux-x86_64.tar.gz
 ```
 git clone https://github.com/projectmech/Home-AI.git
 cd Home-AI
-sudo ./install.sh --version v0.1.0
+sudo ./install.sh
 ```
-It asks for a GitHub token with read access to the repository. Use a fine-grained token limited to this repository with "Contents: read". The token is used for the download and not saved. `git clone` of a private repository needs its own credentials.
+With no arguments it installs the latest release (`--version v0.1.0` picks one). It first tries without signing in; because the repository is private, GitHub refuses, and it then asks for a GitHub token with read access to the repository. Use a fine-grained token limited to this repository with "Contents: read". The token is used for the download and not saved. `git clone` of a private repository needs its own credentials.
 
 When it finishes it prints the dashboard address, the setup address, a one-time setup token, and the certificate fingerprint.
 
@@ -82,18 +82,12 @@ sudo ./uninstall.sh            # removes program and service, keeps data and set
 sudo ./uninstall.sh --purge    # also deletes database, certificate, backups, settings, account
 ```
 
-## Release signing key (one-time, done by the repository owner)
-A release is only as trustworthy as its signature. The private key must never be in the repository; only GitHub Actions should hold it.
+## How releases are signed and checked
+There is no signing key to create or keep. Details and limits: `docs/adr/0003-sigstore-keyless-release-signing.md`.
 
-1. On a computer you trust, create the key pair:
-   ```
-   openssl genpkey -algorithm ed25519 -out release-signing.key.pem
-   openssl pkey -in release-signing.key.pem -pubout -out release-signing.pub.pem
-   ```
-2. In the GitHub repository: Settings → Secrets and variables → Actions → New repository secret. Name `RELEASE_SIGNING_KEY`, value: the whole contents of `release-signing.key.pem`.
-3. Commit `release-signing.pub.pem` to the repository as `packaging/release-signing.pub.pem`.
-4. Store `release-signing.key.pem` somewhere safe and offline, then delete it from the computer. Anyone holding it can sign a release your servers will accept.
+- Pushing a version tag such as `v0.1.0` runs the Release workflow. It builds for the Core 2 Duo baseline, signs the bundle with Sigstore keyless signing using the workflow's GitHub identity, verifies it, installs it once as a test, and publishes the bundle with its `.sigstore.json` evidence file.
+- `install.sh` and `update.sh` accept a bundle only if that evidence proves it was signed by `.github/workflows/release.yml` of `projectmech/Home-AI` on a version tag, and the file is unaltered. A missing or invalid evidence file stops the install. There is no option to skip this.
+- The first verification on a server downloads the verifier (cosign, about 140 MB, checksum-pinned) and needs internet access.
+- Each release permanently records the repository name, workflow path, tag, commit SHA and bundle hash in Sigstore's public log, even though the repository is private. No code or contents are published.
 
-To publish a release: set the version in `server/Cargo.toml`, commit, and push a matching tag such as `v0.1.0`. The Release workflow tests, builds for the Core 2 Duo baseline, packages, signs, checks the signature against the public key in the repository, and publishes.
-
-Until steps 1–3 are done, `install.sh` and `update.sh` refuse every bundle unless `--insecure-skip-signature` is given.
+To publish a release: set the version in `server/Cargo.toml`, commit, and push the matching tag.

@@ -91,3 +91,10 @@ After each session append dated lines with: milestone, files changed, tests run 
 - **Waiting on the user:** create the release signing key, add the `RELEASE_SIGNING_KEY` secret, commit `packaging/release-signing.pub.pem` (docs/INSTALL.md).
 - **M1b still to build:** setup wizard beyond administrator creation, Users page, Updates and Backups in the dashboard, lost-password recovery command, certificate renewal.
 - **Next single action:** web setup wizard steps that have a backend today (welcome with server info, administrator, home configuration, security, finish).
+
+### 2026-11-12 (late night) — setup wizard in CI; release signing switched to Sigstore keyless
+- **Evidence:** CI run #9 (commit 4d2204c) Success: wizard backend tests, smoke and install jobs pass. Run #8 failed on a `json!` macro compile error, fixed in 4d2204c.
+- **Wizard:** nine steps (prompts/06 §5). Working: token-gated welcome, administrator (auto sign-in), home configuration, session length, finish. Shown as not available: AI, voice, integrations, device management. Never opened in a browser by anyone.
+- **Signing:** user asked for no permanent key. Releases are now signed with Sigstore keyless signing and verified with a pinned cosign (docs/adr/0003). `--insecure-skip-signature` and the Ed25519 release key are removed.
+- **Never executed:** `cosign sign-blob` and the successful `cosign verify-blob` path. They run only in the Release workflow on a tag push. Expect fixes on the first attempt.
+- **Next single action:** with the user's go-ahead (signing writes the repository name to a public log), push tag `v0.1.0` and get the Release workflow green.

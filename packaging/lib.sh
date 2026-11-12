@@ -27,38 +27,94 @@ need_commands() {
   if [ "${#missing[@]}" -gt 0 ]; then
     die "Missing required commands: ${missing[*]}
 On Debian or Ubuntu install them with:
-  apt-get install -y ca-certificates curl openssl tar coreutils util-linux iproute2 passwd"
+  apt-get install -y ca-certificates curl tar coreutils util-linux iproute2 passwd gawk"
   fi
 }
 
-# verify_bundle <tarball> <public-key-file> <allow-unsigned: 0|1>
-# Authenticity first (signature over SHA256SUMS), then integrity (checksum).
-verify_bundle() {
-  local bundle=$1 pubkey=$2 allow_unsigned=$3
-  local dir base
-  dir=$(dirname "$bundle"); base=$(basename "$bundle")
-  [ -f "$bundle" ] || die "Bundle not found: $bundle"
-  [ -f "$dir/SHA256SUMS" ] || die "SHA256SUMS must be in the same folder as the bundle ($dir)."
+# ---- release verification (Sigstore keyless) --------------------------------
+#
+# Releases are signed in GitHub Actions with a short-lived certificate that
+# Sigstore issues to the workflow's GitHub OIDC identity. There is no long-lived
+# private key anywhere. A release is accepted only if its Sigstore bundle proves
+# it was signed by THIS workflow, in THIS repository, on a version tag.
 
-  if [ "$allow_unsigned" = "1" ]; then
-    warn "Signature check skipped (--insecure-skip-signature). Authenticity of this bundle is NOT verified."
-  else
-    [ -f "$pubkey" ] || die "No release signing key at $pubkey.
-The repository does not contain a public key yet, so authenticity cannot be verified.
-See docs/INSTALL.md, 'Release signing key'."
-    [ -f "$dir/SHA256SUMS.sig" ] || die "SHA256SUMS.sig must be in the same folder as the bundle ($dir)."
-    openssl pkeyutl -verify -pubin -inkey "$pubkey" -rawin \
-      -in "$dir/SHA256SUMS" -sigfile "$dir/SHA256SUMS.sig" >/dev/null 2>&1 \
-      || die "Signature check FAILED. This bundle was not signed by the key in $pubkey. Nothing was installed."
-    log "Signature: valid (key $pubkey)"
+# The only identity releases are accepted from.
+RELEASE_IDENTITY_REGEXP='^https://github\.com/projectmech/Home-AI/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+RELEASE_OIDC_ISSUER='https://token.actions.githubusercontent.com'
+
+# The verifier itself is pinned: exact version and SHA-256 of the official
+# sigstore/cosign release binary (digest as published on its release page).
+COSIGN_VERSION=v3.1.4
+COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+COSIGN_URL="https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+TOOLS_DIR=${HOME_AI_TOOLS_DIR:-/usr/local/lib/home-ai}
+COSIGN="$TOOLS_DIR/cosign-$COSIGN_VERSION"
+
+sha256_of() { sha256sum "$1" | awk '{print $1}'; }
+
+# Makes sure the pinned cosign is present, intact and runs on this CPU.
+ensure_cosign() {
+  if [ -x "$COSIGN" ] && [ "$(sha256_of "$COSIGN")" = "$COSIGN_SHA256" ]; then
+    return 0
+  fi
+  log "Fetching the release verifier (cosign $COSIGN_VERSION, about 140 MB)..."
+  mkdir -p "$TOOLS_DIR"
+  local tmp="$COSIGN.download"
+  curl --silent --show-error --fail --location --max-time 900 "$COSIGN_URL" -o "$tmp" \
+    || { rm -f "$tmp"; die "Could not download cosign from $COSIGN_URL.
+Releases cannot be verified without it, so nothing was installed."; }
+  local got
+  got=$(sha256_of "$tmp")
+  if [ "$got" != "$COSIGN_SHA256" ]; then
+    rm -f "$tmp"
+    die "The downloaded cosign does not match its pinned checksum.
+  expected $COSIGN_SHA256
+  got      $got
+Nothing was installed."
+  fi
+  chmod 0755 "$tmp"
+  mv "$tmp" "$COSIGN"
+  "$COSIGN" version >/dev/null 2>&1 \
+    || die "cosign $COSIGN_VERSION does not run on this machine, so releases cannot be verified. Nothing was installed."
+}
+
+# verify_bundle <tarball>
+# Requires <tarball>.sigstore.json beside it. Proves integrity (the signature
+# covers the file's digest) and provenance (who signed it). There is no way to
+# skip this.
+verify_bundle() {
+  local bundle=$1
+  [ -f "$bundle" ] || die "Bundle not found: $bundle"
+
+  # Test hook, honoured only on CI runners: lets the install tests exercise
+  # install/update/rollback with throwaway bundles. Still a real signature check.
+  if [ "${CI:-}" = "true" ] && [ -n "${HOME_AI_TEST_PUBKEY:-}" ]; then
+    [ -f "$bundle.testsig" ] || die "Test signature missing: $bundle.testsig. Nothing was installed."
+    openssl pkeyutl -verify -pubin -inkey "$HOME_AI_TEST_PUBKEY" -rawin \
+      -in "$bundle" -sigfile "$bundle.testsig" >/dev/null 2>&1 \
+      || die "Test signature check FAILED for $(basename "$bundle"). Nothing was installed."
+    warn "Verified with a CI TEST KEY, not Sigstore. This must never appear outside CI."
+    return 0
   fi
 
-  local line
-  line=$(grep -F "  $base" "$dir/SHA256SUMS" || true)
-  [ -n "$line" ] || die "$base is not listed in SHA256SUMS."
-  ( cd "$dir" && printf '%s\n' "$line" | sha256sum --check --status ) \
-    || die "Checksum mismatch for $base: the file is corrupt or was altered. Nothing was installed."
-  log "Checksum: matches"
+  local evidence="$bundle.sigstore.json"
+  [ -f "$evidence" ] || die "No verification evidence: $(basename "$evidence") must be in the same folder as the bundle.
+A release without it is not accepted. Nothing was installed."
+
+  ensure_cosign
+  local out
+  if ! out=$("$COSIGN" verify-blob \
+      --bundle "$evidence" \
+      --certificate-identity-regexp "$RELEASE_IDENTITY_REGEXP" \
+      --certificate-oidc-issuer "$RELEASE_OIDC_ISSUER" \
+      "$bundle" 2>&1); then
+    die "Release verification FAILED for $(basename "$bundle").
+It is not proven to come from the release workflow of github.com/projectmech/Home-AI,
+or the file was altered. Nothing was installed.
+cosign said:
+$(printf '%s\n' "$out" | tail -n 6)"
+  fi
+  log "Verified: signed by the Home-AI release workflow (Sigstore, keyless), contents intact."
 }
 
 # extract_bundle <tarball> <empty-dir>; prints the directory holding home-ai, web/, VERSION.
