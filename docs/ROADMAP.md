@@ -98,3 +98,10 @@ After each session append dated lines with: milestone, files changed, tests run 
 - **Signing:** user asked for no permanent key. Releases are now signed with Sigstore keyless signing and verified with a pinned cosign (docs/adr/0003). `--insecure-skip-signature` and the Ed25519 release key are removed.
 - **Never executed:** `cosign sign-blob` and the successful `cosign verify-blob` path. They run only in the Release workflow on a tag push. Expect fixes on the first attempt.
 - **Next single action:** with the user's go-ahead (signing writes the repository name to a public log), push tag `v0.1.0` and get the Release workflow green.
+
+### 2026-11-12 (night) — first signed release, v0.1.0, published
+- **Evidence:** Release workflow run on tag `v0.1.0` (commit a91822c), Success, 1m 57s. The workflow's own gates passed before publishing: Sigstore signing, verification with the installer's `verify_bundle`, rejection of an altered file / a file with no evidence / a foreign signer identity, and a real `sudo ./install.sh --bundle` of the signed bundle. The release page lists `home-ai-0.1.0-linux-x86_64.tar.gz` (3.43 MB) and `home-ai-0.1.0-linux-x86_64.tar.gz.sigstore.json` (10.2 KB).
+- **Tag was pushed by the user:** the app's permission check blocked the agent from pushing it (public, irreversible effect).
+- **Not yet proven:** that a machine OTHER than the CI runner accepts this release (no one has run `sudo ./install.sh` with a download from the private repo and a token); Debian 13; the Mac mini / any Core 2 CPU; running cosign on that CPU; the wizard and dashboard in a real browser.
+- **Public record:** this release wrote the repository name, workflow path, tag, commit and bundle hash to Sigstore's public log. Permanent.
+- **Next single action:** install v0.1.0 on a real Debian machine (the Mac mini) with `sudo ./install.sh`, and report what happens.

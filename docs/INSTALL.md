@@ -1,6 +1,6 @@
 # Installing, updating and recovering Home AI
 
-Status, 2026-11-12: the scripts below are exercised by CI on a GitHub Ubuntu runner with real systemd (`scripts/test-install.sh`). They have **not** been run on Debian 13 or on the Mac mini. No release has been published yet, so the download path and the Sigstore signing step have never run.
+Status, 2026-11-12: the scripts below are exercised by CI on a GitHub Ubuntu runner with real systemd (`scripts/test-install.sh`). They have **not** been run on Debian 13 or on the Mac mini. Release v0.1.0 is published and signed (Sigstore signing and verification ran successfully in the Release workflow). The download path of `install.sh` with a token has never been run from another machine.
 
 The terminal is for installing and for emergencies. Everything else is meant to happen in the web interface; today that covers creating the administrator, signing in, device control, server metrics and the activity log. The rest of the setup wizard is not built yet.
 
