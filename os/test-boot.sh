@@ -18,7 +18,7 @@ SOCK="$(mktemp -u /tmp/qmon.XXXXXX).sock"
 : > "$LOG"
 
 # Send a command to the QEMU monitor (keyboard input, screenshots).
-monitor() { printf 
+monitor() { printf '%s\n' "$1" | timeout 5 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true; }
 
 ACCEL=tcg
 if [ -w /dev/kvm ]; then ACCEL=kvm; fi
