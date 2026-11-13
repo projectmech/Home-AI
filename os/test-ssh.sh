@@ -17,8 +17,12 @@ ACCEL=tcg
 if [ -w /dev/kvm ]; then ACCEL=kvm; fi
 echo "accel=$ACCEL cpu=Penryn timeout=${TIMEOUT}s"
 
+SOCK="$(mktemp -u /tmp/qmon.XXXXXX).sock"
+monitor() { printf '%s\n' "$1" | timeout 5 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true; }
+
 qemu-system-x86_64 -machine "pc,accel=$ACCEL" -cpu Penryn -smp 2 -m 1536 \
   -display none -serial "file:$LOG" -no-reboot \
+  -monitor "unix:$SOCK,server=on,wait=off" \
   -cdrom "$ISO" -boot d \
   -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22" -device e1000,netdev=n0 &
 QPID=$!
@@ -37,8 +41,15 @@ SSH=(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o 
 echo "== waiting for SSH with the key"
 START=$SECONDS
 OUT=""
+LASTKEY=-100
 while [ $((SECONDS - START)) -lt "$TIMEOUT" ]; do
   kill -0 "$QPID" 2>/dev/null || fail "the VM exited before SSH came up"
+  # This test is about SSH, not the boot menu: if the menu waits for a key,
+  # press Enter (ignored once the kernel is running).
+  ELAPSED=$((SECONDS - START))
+  if [ "$ELAPSED" -lt 120 ] && [ $((ELAPSED - LASTKEY)) -ge 10 ]; then
+    monitor "sendkey ret"; LASTKEY=$ELAPSED
+  fi
   if OUT=$("${SSH[@]}" -i "$KEY" -o IdentitiesOnly=yes jarvis-admin@127.0.0.1 \
         'id -un; sudo -n id -un; sudo -n home-ai version' 2>/dev/null); then break; fi
   OUT=""
