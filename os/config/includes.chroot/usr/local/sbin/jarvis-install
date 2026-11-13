@@ -259,7 +259,11 @@ chroot "$TARGET" update-grub
 STEP="checking"
 ls "$TARGET"/boot/vmlinuz-* >/dev/null
 ls "$TARGET"/boot/initrd.img-* >/dev/null
-grep -q "root=/dev/mapper/$MAPNAME" "$TARGET/boot/grub/grub.cfg" || die "grub.cfg does not point at the encrypted root"
+# GRUB writes root=UUID=<filesystem inside the encrypted volume> (or the mapper
+# path); either is right, and the initramfs opens the volume through crypttab.
+ROOTUUID=$(blkid -s UUID -o value "/dev/mapper/$MAPNAME")
+grep -qE "root=(/dev/mapper/$MAPNAME|UUID=$ROOTUUID)( |$)" "$TARGET/boot/grub/grub.cfg" || die "grub.cfg does not point at the encrypted root"
+grep -q "^$MAPNAME " "$TARGET/etc/crypttab" || die "crypttab has no entry for the encrypted root"
 [ -x "$TARGET/opt/home-ai/bin/home-ai" ] || die "the JARVIS core is missing from the installed system"
 
 STEP="finishing"
