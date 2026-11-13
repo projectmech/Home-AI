@@ -64,7 +64,13 @@ while [ $((SECONDS - START)) -lt "$TIMEOUT" ]; do
   sleep 5
 done
 
-if [ "$RESULT" != "PASS" ]; then monitor "screendump screen-$MODE.ppm"; sleep 2; fi
+# The VM powers itself off right after printing its verdict, so look once more
+# after it has exited before calling that a failure.
+if [ "$RESULT" = "VM-EXITED" ]; then
+  if grep -q "JARVIS-SELFTEST: PASS" "$LOG"; then RESULT=PASS; fi
+  if grep -q "JARVIS-SELFTEST: FAIL" "$LOG"; then RESULT=FAIL; fi
+fi
+if [ "$RESULT" != "PASS" ] && kill -0 "$QPID" 2>/dev/null; then monitor "screendump screen-$MODE.ppm"; sleep 2; fi
 echo "---- serial console (last 70 lines) ----"
 tail -n 70 "$LOG" | tr -d '\r'
 echo "----------------------------------------"
@@ -72,6 +78,6 @@ echo "result: $RESULT after $((SECONDS - START))s"
 
 if [ "$RESULT" != "PASS" ]; then
   printf '::error title=boot test %s: %s::%s\n' "$MODE" "$RESULT" \
-    "$(tail -n 25 "$LOG" | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+    "$( { grep -a -E 'JARVIS|selftest|home-ai|Failed|failed|emergency|panic|Illegal' "$LOG" | tail -n 30; echo ----; tail -n 12 "$LOG"; } | tr -d '\r' | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
   exit 1
 fi
