@@ -32,3 +32,10 @@ CI bakes `jarvis.selftest=1` into the boot entry so the VM needs no keyboard. A 
 - A boot self-test must not write to a serial tty it does not own: the serial login prompt takes the port over and hangs up other holders. Use the kernel log (`/dev/kmsg`, with `kernel.printk_devkmsg=on`), which reaches every console.
 - A self-test unit must not be `Type=oneshot` if it waits for boot to complete.
 - Result: BIOS and EFI boot tests both pass under `-cpu Penryn` (run 43421607888). Still not evidence about the real Mac mini.
+
+## Addendum 2026-11-13 — installer design (phase 3)
+- Decision: a purpose-built shell installer (`jarvis-install`) instead of Debian d-i + preseed. It copies the already-tested live root filesystem, so the installed system is the same bits CI inspected, and the whole flow can be driven and verified in a VM.
+- LUKS2 root, unencrypted `/boot` (GRUB without cryptodisk, so the unlock prompt comes from the initramfs). Passphrase plus a generated recovery key in two keyslots. EFI: GPT with ESP, installed with `--removable --no-nvram`; BIOS: MBR.
+- The boot menu default stays the live image; the installer and the recovery shell are separate entries and units gated by kernel command-line flags.
+- Lesson: GRUB writes `root=UUID=` of the filesystem inside the LUKS volume, not the mapper path; checks must accept that.
+- Still open: Clevis/Tang (needs a separate device), signed ISO, real-hardware test.
