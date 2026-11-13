@@ -38,3 +38,8 @@ Unknown answers should **not** block unrelated simulated-core milestones.
 - Which microphones and speakers exist, in which rooms? What hardware for room voice clients?
 - Should an open dashboard tab be allowed to listen for the wake word, or only dedicated clients?
 - Preferred form of address and default language (English or Norwegian)?
+
+## Wi-Fi on the Mac mini (asked 2026-11-13)
+- The user wants Wi-Fi. Which wireless chip is in this Macmini4,1? (`lspci -nn | grep -i network` on the machine.) The 2010 model is believed to carry a Broadcom AirPort chip; its Linux driver and whether its firmware may be redistributed in a public ISO are unconfirmed.
+- Options to choose between once the chip is known: (a) include Debian non-free-firmware packages in the image (redistributable ones only) and add a console Wi-Fi setup on the physical screen and keyboard; (b) a USB Wi-Fi adapter with a free in-kernel driver; (c) a cheap Wi-Fi client bridge or travel router that gives the Mac mini a wired connection with no software at all.
+- A 24/7 server should prefer wired Ethernet (prompts/02 §2). Wi-Fi support is unbuilt and untested; do not claim it works.
