@@ -26,7 +26,10 @@ monitor() { printf '%s\n' "$1" | timeout 5 socat - "UNIX-CONNECT:$SOCK" >/dev/nu
 fail() {
   echo "FAIL: $*"
   monitor "screendump screen-$MODE.ppm"; sleep 1
-  printf '::error title=boot test %s::%s\n' "$MODE" "$*"
+  # Put the useful serial lines into the failure message itself.
+  CTX=$( { clean | grep -aE 'jarvis|JARVIS|home-ai|Failed|failed|networkd|DHCP|dhcp|Dashboard|Setup token|ttyS0|Reached target|login:' | tail -n 30; echo '-----'; clean | tail -n 12; } 2>/dev/null \
+    | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+  printf '::error title=boot test %s::%s %%0A%s\n' "$MODE" "$*" "$CTX"
   exit 1
 }
 

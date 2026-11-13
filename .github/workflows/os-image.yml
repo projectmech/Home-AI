@@ -61,10 +61,20 @@ jobs:
           ls -l /dev/kvm || echo "no /dev/kvm: tests run under software emulation"
 
       - name: Boot test, BIOS
-        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 420
+        id: bios
+        continue-on-error: true
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 300
 
       - name: Boot test, EFI
-        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 420
+        id: efi
+        continue-on-error: true
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 300
+
+      - name: Fail the job if a boot test failed
+        if: steps.bios.outcome == 'failure' || steps.efi.outcome == 'failure'
+        run: |
+          echo "BIOS: ${{ steps.bios.outcome }}  EFI: ${{ steps.efi.outcome }}"
+          exit 1
 
       - name: Show the serial logs on the run page
         if: always()

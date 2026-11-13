@@ -8,6 +8,12 @@
 ISSUE=/etc/issue.d/20-jarvis.issue
 mkdir -p /etc/issue.d
 
+# Diagnostics for the kernel log (visible on the serial console and in dmesg).
+# Lengths and states only: never the token or anything secret.
+sysctl -q -w kernel.printk_devkmsg=on 2>/dev/null
+dbg() { printf 'jarvis-banner: %s\n' "$*" > /dev/kmsg 2>/dev/null; }
+dbg "started"
+
 ipv4() { ip -4 -o addr show scope global 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4; exit}'; }
 healthy() { curl -sf --max-time 3 --cacert /var/lib/home-ai/tls/cert.pem https://localhost:8443/api/health >/dev/null 2>&1; }
 
@@ -21,6 +27,7 @@ IP=$(ipv4)
 HOSTNAME_NOW=$(hostname)
 FP=$(/usr/local/bin/home-ai tls-fingerprint 2>/dev/null)
 TOKEN=$(/usr/local/bin/home-ai setup-token 2>/dev/null | grep -Eo '[0-9a-f]{64}' | head -n 1)
+dbg "waited ${i}s healthy=$(healthy && echo yes || echo no) ip=${IP:-none} token_len=${#TOKEN} fp_len=${#FP} tty1=$([ -c /dev/tty1 ] && echo yes || echo no) ttyS0=$([ -c /dev/ttyS0 ] && echo yes || echo no)"
 [ -n "$IP" ] || IP="(no address yet - is the network cable plugged in?)"
 [ -n "$TOKEN" ] || TOKEN="(none - setup is already complete)"
 [ -n "$FP" ] || FP="(unavailable)"
