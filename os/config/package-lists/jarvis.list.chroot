@@ -6,3 +6,5 @@ ca-certificates
 procps
 less
 avahi-daemon
+openssh-server
+sudo

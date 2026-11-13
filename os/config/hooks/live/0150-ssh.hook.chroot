@@ -1,0 +1,27 @@
+#!/bin/sh
+# SSH access: key-only, one named account, and only if a public key was built in.
+set -e
+
+KEYS=/etc/ssh/authorized_keys/jarvis-admin
+
+# Never ship host keys inside the image: every copy would share them.
+rm -f /etc/ssh/ssh_host_*
+
+if [ -s "$KEYS" ]; then
+  # A bad key file must fail the build, not silently lock you out.
+  ssh-keygen -l -f "$KEYS" >/dev/null
+  chmod 0644 "$KEYS"
+
+  # An account with a locked password: it can only be entered with the key.
+  useradd --create-home --shell /bin/bash --password '*' jarvis-admin
+  # Test image: the key holder may become root. No password exists to guess.
+  echo 'jarvis-admin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/jarvis-admin
+  chmod 0440 /etc/sudoers.d/jarvis-admin
+
+  systemctl enable jarvis-sshkeys.service
+  systemctl enable ssh.service
+else
+  # No key: no account, and no SSH server running.
+  rm -rf /etc/ssh/authorized_keys
+  systemctl disable ssh.service 2>/dev/null || true
+fi

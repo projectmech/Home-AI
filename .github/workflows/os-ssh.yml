@@ -1,0 +1,61 @@
+name: OS image SSH
+
+# Builds the OS image WITH a throwaway SSH public key, boots it, and proves the
+# key-only SSH access works and everything else is refused. The throwaway key
+# exists only inside this job; the ISO built here is never published.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - os/**
+      - .github/workflows/os-ssh.yml
+
+permissions:
+  contents: read
+
+jobs:
+  ssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the newest signed release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --limit 10 --json tagName,isDraft --jq '[.[] | select(.isDraft | not)][0].tagName')
+          mkdir -p release
+          gh release download "$TAG" --dir release \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz' \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz.sigstore.json'
+
+      - name: Make a throwaway key pair
+        run: ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/test_key"
+
+      - name: Build the ISO with the public key
+        run: >
+          bash scripts/ci-run.sh os-build bash os/build.sh
+          --bundle "$(ls release/home-ai-*-linux-x86_64.tar.gz)"
+          --ssh-key "$RUNNER_TEMP/test_key.pub" --out out
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: SSH test
+        run: bash scripts/ci-run.sh ssh-test bash os/test-ssh.sh out/jarvis-os-amd64.iso "$RUNNER_TEMP/test_key" 420
+
+      - name: Keep the serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-ssh-serial-log
+          path: serial-ssh.log
+          if-no-files-found: ignore
+          retention-days: 7
