@@ -55,6 +55,19 @@ jobs:
       - name: Boot test, EFI
         run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 600
 
+      - name: Show the serial logs on the run page
+        if: always()
+        run: |
+          for m in bios efi; do
+            [ -f "serial-$m.log" ] || continue
+            {
+              echo "### Serial console: $m"
+              echo '```'
+              tr -d '\r' < "serial-$m.log" | strings | tail -n 250
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Keep the serial logs and screenshots
         if: always()
         uses: actions/upload-artifact@v4
