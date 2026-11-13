@@ -68,6 +68,48 @@ jobs:
           MSG=$( { echo "files: $(ls isox/isolinux 2>/dev/null | tr '\n' ' ') | $(ls isox/grub 2>/dev/null | tr '\n' ' ')"; grep -HiE '^[[:space:]]*(timeout|default|ontimeout|prompt|menu default|label|include)|set (timeout|default)' isox/isolinux/*.cfg isox/grub/config.cfg isox/grub/grub.cfg 2>/dev/null | head -n 40; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::warning title=boot menu settings found in the ISO::$MSG"
 
+      - name: Inspect the finished ISO (required and forbidden contents)
+        run: |
+          sudo apt-get install -y --no-install-recommends squashfs-tools xorriso >/dev/null
+          mkdir -p inspect
+          xorriso -osirrox on -indev out/jarvis-os-amd64.iso -extract /live/filesystem.squashfs inspect/fs.squashfs >/dev/null 2>&1
+          unsquashfs -l inspect/fs.squashfs > inspect/files.txt
+          unsquashfs -cat inspect/fs.squashfs var/lib/dpkg/status > inspect/dpkg-status.txt
+          SIZE=$(stat -c %s out/jarvis-os-amd64.iso)
+          SHA=$(cut -d' ' -f1 out/jarvis-os-amd64.iso.sha256)
+          PKGS=$(grep -c '^Package:' inspect/dpkg-status.txt)
+          KERNEL=$(grep -oE 'lib/modules/[0-9][^/]*' inspect/files.txt | sort -u | head -n 1 | cut -d/ -f3)
+          CORE=$(unsquashfs -cat inspect/fs.squashfs opt/home-ai/VERSION | head -n 1)
+          fail=0
+          : > inspect/report.txt
+          need()   { if grep -qE "$1" inspect/files.txt; then echo "present: $2" >> inspect/report.txt; else echo "MISSING: $2" >> inspect/report.txt; fail=1; fi; }
+          forbid() { if grep -qE "$1" inspect/files.txt; then echo "FORBIDDEN PRESENT: $2" >> inspect/report.txt; fail=1; else echo "absent: $2" >> inspect/report.txt; fi; }
+          need 'squashfs-root/opt/home-ai/bin/home-ai$' 'JARVIS core binary'
+          need 'squashfs-root/opt/home-ai/web/index.html$' 'dashboard'
+          need 'squashfs-root/etc/systemd/system/home-ai.service$' 'home-ai service unit'
+          need 'squashfs-root/etc/systemd/system/jarvis-banner.service$' 'console banner unit'
+          need 'squashfs-root/usr/local/lib/jarvis/banner.sh$' 'console banner script'
+          need 'squashfs-root/usr/local/bin/home-ai$' 'admin command'
+          need 'drivers/net/ethernet/nvidia/forcedeth\.ko' 'Mac mini Ethernet driver (forcedeth)'
+          need 'systemd/systemd-networkd$' 'DHCP (systemd-networkd)'
+          need '(sbin|bin)/avahi-daemon$' 'jarvis.local (avahi)'
+          need 'bin/lspci$' 'lspci (network chip listing)'
+          need 'bin/curl$' 'curl'
+          forbid '(sbin|bin)/sshd$' 'SSH server'
+          forbid 'usr/bin/sudo$' 'sudo'
+          forbid 'etc/sudoers\.d/jarvis-admin' 'sudoers entry for jarvis-admin'
+          forbid 'squashfs-root/home/jarvis-admin' 'jarvis-admin account home'
+          forbid 'etc/ssh/authorized_keys' 'built-in SSH keys'
+          {
+            echo '### Finished ISO'
+            echo "- size: $SIZE bytes"; echo "- sha256: $SHA"; echo "- kernel: $KERNEL"
+            echo "- JARVIS core: $CORE"; echo "- installed packages: $PKGS"
+            echo '```'; cat inspect/report.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          MSG=$( { echo "size=$SIZE sha256=$SHA kernel=$KERNEL core=$CORE packages=$PKGS"; cat inspect/report.txt; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          if [ "$fail" = 0 ]; then echo "::warning title=ISO inspection: all required present, nothing forbidden::$MSG"; else echo "::error title=ISO inspection FAILED::$MSG"; fi
+          exit "$fail"
+
       - name: Install QEMU and firmware
         run: |
           sudo apt-get update

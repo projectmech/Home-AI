@@ -27,6 +27,9 @@
  JARVIS OS - live test image. Nothing is installed on this computer's disk.
  Dashboard:   https://192.168.1.50:8443
  Setup token: <64 characters>
+ Network:     eth0  driver=forcedeth  state=up  cable connected
+ Hardware:    Ethernet controller [0200]: ... [10de:xxxx]
+ Hardware:    Network controller [0280]: ... [14e4:xxxx]   (the Wi-Fi chip)
  Certificate SHA-256: AA:BB:...
 ```
 
@@ -42,7 +45,8 @@ The token works for 60 minutes. For a new one, restart the Mac mini. `https://ja
 Please tell me exactly what you saw. The most useful details:
 - Did the stick appear in the Option-key list? Under which name?
 - Did you get past the boot menu? What does the screen show (black, error text, the box above)?
-- If the box shows no address: is the Ethernet cable plugged in and lit?
+- If the box shows no address: is the Ethernet cable plugged in and lit? The Network line says whether the system sees a cable and which driver it uses.
+- Please send the Hardware lines (a photo of the screen is fine). They name the exact wired and Wi-Fi chips, which decides whether Wi-Fi can be added.
 - What does the Server page say about CPU model, memory and drive type? (That is real information about your machine.)
 
-Known limits: wired network only; no sound, Wi-Fi or Bluetooth; the console has no login; the screen uses a plain text mode (the image starts with `nomodeset` to avoid graphics-driver problems on the 2010 NVIDIA chip).
+Known limits: wired network only; no sound, Wi-Fi or Bluetooth; no remote login of any kind (no SSH, no accounts, no sudo); the console has no login; the screen uses a plain text mode (the image starts with `nomodeset` to avoid graphics-driver problems on the 2010 NVIDIA chip).
