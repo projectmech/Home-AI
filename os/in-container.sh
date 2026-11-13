@@ -39,6 +39,14 @@ lb build
 
 ISO=$(ls /build/lb/*.iso | head -n 1)
 
+# ---- the Mac mini's Ethernet driver must be in the image ---------------------
+# Macmini4,1: NVIDIA MCP89 Ethernet (PCI 10de:0d7d), driven by forcedeth, which
+# needs no firmware. Fail the build if the module is missing from the image.
+echo "network drivers present in the image:"
+find /build/lb/chroot -path '*/drivers/net/ethernet/*' \( -name 'forcedeth.ko*' -o -name 'tg3.ko*' -o -name 'r8169.ko*' -o -name 'e1000e.ko*' -o -name 'igb.ko*' \) -printf '  %f\n' | sort -u
+find /build/lb/chroot -name 'forcedeth.ko*' | grep -q . \
+  || { echo "ERROR: forcedeth (the Mac mini's Ethernet driver) is not in the image" >&2; exit 1; }
+
 # ---- start by itself: boot the default entry after 5 seconds ------------------
 # Debian live menus wait forever for a key (isolinux "timeout 0"; GRUB with no
 # timeout), which is wrong for a headless server. A live-build hook for this

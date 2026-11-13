@@ -6,3 +6,4 @@ ca-certificates
 procps
 less
 avahi-daemon
+pciutils

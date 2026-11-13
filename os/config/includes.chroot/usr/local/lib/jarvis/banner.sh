@@ -32,6 +32,26 @@ dbg "waited ${i}s healthy=$(healthy && echo yes || echo no) ip=${IP:-none} token
 [ -n "$TOKEN" ] || TOKEN="(none - setup is already complete)"
 [ -n "$FP" ] || FP="(unavailable)"
 
+# What the hardware reports, so a missing network can be diagnosed from the
+# screen: each interface with its kernel driver and whether a cable is seen.
+NETINFO=""
+for d in /sys/class/net/*; do
+  n=${d##*/}
+  [ "$n" = "lo" ] && continue
+  drv=$(basename "$(readlink "$d/device/driver" 2>/dev/null)" 2>/dev/null)
+  [ -n "$drv" ] || drv="unknown"
+  st=$(cat "$d/operstate" 2>/dev/null)
+  if [ "$(cat "$d/carrier" 2>/dev/null)" = "1" ]; then link="cable connected"; else link="NO LINK (cable?)"; fi
+  NETINFO="$NETINFO
+ Network:     $n  driver=$drv  state=${st:-?}  $link"
+done
+if [ -z "$NETINFO" ]; then
+  PCI=$(lspci -nn 2>/dev/null | grep -iE 'ethernet|network' | sed 's/^[^ ]* //' | tr '\n' ';')
+  NETINFO="
+ Network:     NO NETWORK INTERFACE FOUND. PCI network devices: ${PCI:-none listed}"
+fi
+dbg "net:$(printf '%s' "$NETINFO" | tr '\n' ' ')"
+
 TEXT=$(cat <<EOF
 
 ==============================================================================
@@ -40,7 +60,7 @@ TEXT=$(cat <<EOF
  Open this on another computer on the same network:
 
  Dashboard:   https://$IP:8443
- Alternative: https://$HOSTNAME_NOW.local:8443
+ Alternative: https://$HOSTNAME_NOW.local:8443$NETINFO
 
  Setup token: $TOKEN
               (valid for 60 minutes; restart this computer for a new one)
