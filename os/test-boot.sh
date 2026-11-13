@@ -64,8 +64,15 @@ clean() { tr -d '\r' < "$LOG" | sed -E 's/\x1b\[[0-9;?!]*[a-zA-Z]//g; s/\x1b\][0
 # ---- 1. wait for the console banner ----
 START=$SECONDS
 TOKEN=""; FP=""; ADDR=""
+NEEDED_ENTER=0
 while [ $((SECONDS - START)) -lt "$TIMEOUT" ]; do
   kill -0 "$QPID" 2>/dev/null || fail "the VM exited before the banner appeared"
+  # If nothing has appeared after 100 s, press Enter once. That separates "the
+  # boot menu waits for a key" from "the banner is broken"; the run still fails.
+  if [ $((SECONDS - START)) -ge 100 ] && [ "$NEEDED_ENTER" = 0 ] && [ -z "$TOKEN" ]; then
+    echo "no banner after 100 s: pressing Enter once to see whether the boot menu was waiting"
+    monitor "sendkey ret"; NEEDED_ENTER=1
+  fi
   TEXT=$(clean || true)
   TOKEN=$(grep -Eo 'Setup token: +[0-9a-f]{64}' <<< "$TEXT" | tail -n 1 | grep -Eo '[0-9a-f]{64}' || true)
   FP=$(grep -Eo 'Certificate SHA-256: +([0-9A-F]{2}:){31}[0-9A-F]{2}' <<< "$TEXT" | tail -n 1 | grep -Eo '([0-9A-F]{2}:){31}[0-9A-F]{2}' || true)
@@ -106,4 +113,5 @@ curl -sk --max-time 10 "$URL/" | grep -q '<div id="app">' || fail "dashboard pag
 curl -skI --max-time 10 "$URL/" | grep -qi '^content-security-policy:' || fail "no security headers"
 echo "dashboard served with security headers"
 
+[ "$NEEDED_ENTER" = 0 ] || fail "everything works, but only after pressing Enter: the boot menu does not start by itself"
 echo "RESULT: PASS ($MODE) in $((SECONDS - START))s"
