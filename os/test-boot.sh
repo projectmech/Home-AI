@@ -41,7 +41,7 @@ ARGS=(-machine "pc,accel=$ACCEL" -cpu Penryn -smp 2 -m 1536
       -display none -serial "file:$LOG" -no-reboot
       -monitor "unix:$SOCK,server=on,wait=off"
       -cdrom "$ISO" -boot d
-      -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:8443" -device e1000,netdev=n0)
+      -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:8443,hostfwd=tcp:127.0.0.1:18022-:22" -device e1000,netdev=n0)
 
 case "$MODE" in
   bios) ;;
@@ -108,6 +108,12 @@ RESP=$(curl -sk --max-time 10 -X POST -H 'content-type: application/json' \
   -d "{\"setup_token\":\"$TOKEN\"}" "$URL/api/setup/verify" || true)
 grep -q '"mem_total_bytes"' <<< "$RESP" || fail "the token shown on the console was not accepted: $RESP"
 echo "console token accepted by the setup endpoint; wrong token refused"
+
+# No remote shell: nothing may answer on port 22 (forwarded to the VM). A
+# listening sshd would send an "SSH-2.0-..." banner; a closed port sends nothing.
+SSHBANNER=$( { exec 3<>/dev/tcp/127.0.0.1/18022 && read -r -t 4 -u 3 line; printf '%s' "${line:-}"; } 2>/dev/null || true)
+case "$SSHBANNER" in SSH-*) fail "an SSH server is running in the image ($SSHBANNER)" ;; esac
+echo "no SSH server answers on port 22"
 
 curl -sk --max-time 10 "$URL/" | grep -q '<div id="app">' || fail "dashboard page not served"
 curl -skI --max-time 10 "$URL/" | grep -qi '^content-security-policy:' || fail "no security headers"

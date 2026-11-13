@@ -142,3 +142,8 @@ Requirements: `prompts/07-JARVIS-OS.md`; decisions: `docs/adr/0004-jarvis-os-arc
 - **Added by another session working in this folder (reviewed, not written by me):** optional key-only SSH. The ISO includes a public key (`os/authorized_keys.pub`): account `jarvis-admin`, no password, root login off, password and keyboard-interactive auth off, forwarding off, but `NOPASSWD:ALL` sudo, so whoever holds the matching private key has root on the live image. Confirm that key is the owner's.
 - **Not proven:** a boot on the real Macmini4,1 (Option-key startup list, EFI vs legacy entry, Ethernet driver, text console with `nomodeset`); writing the stick; mDNS from a real client. The ISO is unsigned.
 - **Next:** the user tries it on the Mac mini (docs/LIVE-TEST.md) and reports; then the installer (phase 3).
+
+### 2026-11-13 (later still) — SSH removed from the JARVIS OS image (owner's decision)
+- The owner said the SSH key in the image was not theirs and asked for SSH to be removed. Removed: the public key file, the SSH hook, the sshd settings, the key-service unit, the `--ssh-key` build option, the `openssh-server` and `sudo` packages, the SSH test script and its workflow. The image now has **no remote login of any kind** and no `sudo`.
+- The black-box boot test now also checks that nothing answers on port 22 (a listening sshd would send an `SSH-2.0` banner).
+- Another session working in this folder added the SSH feature without the owner's request. If remote login is wanted later it must be asked for explicitly, with the owner's own public key.

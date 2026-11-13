@@ -22,14 +22,9 @@ REPO=$(dirname "$OSDIR")
 BUNDLE=""
 OUT="$REPO/out"
 SELFTEST=0
-# SSH login is built in ONLY when a public key is given (--ssh-key, or the file
-# os/authorized_keys.pub). Without one the image has no SSH server running.
-SSH_KEY=""
-[ -f "$OSDIR/authorized_keys.pub" ] && SSH_KEY="$OSDIR/authorized_keys.pub"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ssh-key) SSH_KEY=${2:-}; shift 2 ;;
     --bundle) BUNDLE=${2:-}; shift 2 ;;
     --out) OUT=${2:-}; shift 2 ;;
     --selftest) SELFTEST=1; shift ;;
@@ -68,19 +63,6 @@ install -D -m 0644 "$ROOT/VERSION" "$INC/opt/home-ai/VERSION"
 install -D -m 0644 "$REPO/packaging/home-ai.service" "$INC/etc/systemd/system/home-ai.service"
 rm -rf "$WORK/unpack"
 log "JARVIS core $(cat "$INC/opt/home-ai/VERSION") staged"
-
-# ---- optional SSH public key -------------------------------------------------
-if [ -n "$SSH_KEY" ]; then
-  [ -f "$SSH_KEY" ] || die "SSH key file not found: $SSH_KEY"
-  # Public keys only: refuse anything that looks like a private key.
-  if grep -q 'PRIVATE KEY' "$SSH_KEY"; then die "$SSH_KEY contains a PRIVATE key. Give only the public key (the .pub file)."; fi
-  grep -Eq '^(ssh-ed25519|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh.com|ssh-rsa) ' "$SSH_KEY" \
-    || die "$SSH_KEY does not look like an SSH public key (expected a line starting with ssh-ed25519 ...)."
-  install -D -m 0644 "$SSH_KEY" "$INC/etc/ssh/authorized_keys/jarvis-admin"
-  log "SSH login enabled for user jarvis-admin with the key(s) in $(basename "$SSH_KEY")"
-else
-  log "No SSH key given: this image has NO remote login."
-fi
 
 # ---- build ------------------------------------------------------------------
 step "Building the image in a debian:trixie container (this takes several minutes)"
