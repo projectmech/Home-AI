@@ -1,0 +1,74 @@
+name: OS image
+
+# Builds the JARVIS OS ISO from the newest published signed release, then boots
+# it in QEMU as a Core 2-class CPU, once with BIOS and once with EFI, and waits
+# for the image's own self-test. The ISO built here carries the kernel
+# parameter jarvis.selftest=1 so the VM needs no keyboard; a release image is
+# built without it. See docs/adr/0004-jarvis-os-architecture.md.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - os/**
+      - packaging/home-ai.service
+      - packaging/lib.sh
+      - .github/workflows/os-image.yml
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the newest signed release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --limit 10 --json tagName,isDraft --jq '[.[] | select(.isDraft | not)][0].tagName')
+          echo "release: $TAG"
+          mkdir -p release
+          gh release download "$TAG" --dir release \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz' \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz.sigstore.json'
+          ls -l release
+
+      - name: Build the ISO (verifies the bundle with Sigstore first)
+        run: bash scripts/ci-run.sh os-build bash os/build.sh --bundle "$(ls release/home-ai-*-linux-x86_64.tar.gz)" --out out --selftest
+
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || echo "no /dev/kvm: tests run under software emulation"
+
+      - name: Boot test, BIOS
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 900
+
+      - name: Boot test, EFI
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 900
+
+      - name: Keep the serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-serial-logs
+          path: serial-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Keep the test ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-os-selftest-iso
+          path: |
+            out/jarvis-os-amd64.iso
+            out/jarvis-os-amd64.iso.sha256
+          retention-days: 7

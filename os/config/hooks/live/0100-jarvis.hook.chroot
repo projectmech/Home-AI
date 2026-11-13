@@ -1,0 +1,20 @@
+#!/bin/sh
+# Runs inside the image's chroot after packages and files are in place.
+set -e
+
+# The service account: no login, no password.
+useradd --system --user-group --home-dir /var/lib/home-ai --no-create-home \
+  --shell /usr/sbin/nologin home-ai
+
+install -d -m 0750 -o root -g home-ai /etc/home-ai
+chown root:home-ai /etc/home-ai/home-ai.env
+chmod 0640 /etc/home-ai/home-ai.env
+chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /opt/home-ai/bin/home-ai
+chown -R root:root /opt/home-ai
+
+# No default account with a known password: remove live-config's user creation.
+find /lib/live/config -name '*user-setup*' -exec rm -f {} + || true
+
+systemctl enable home-ai.service
+systemctl enable jarvis-selftest.service
+systemctl enable systemd-networkd.service || echo "systemd-networkd unit not present; no DHCP in this image"

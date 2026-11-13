@@ -1,0 +1,6 @@
+#!/bin/sh
+# Administrator command: runs the home-ai CLI as the service account with the
+# service's settings (sudo home-ai setup-token, tls-fingerprint, version).
+[ "$(id -u)" -eq 0 ] || { echo "Run with sudo: sudo home-ai $*" >&2; exit 1; }
+set -a; . /etc/home-ai/home-ai.env; set +a
+exec runuser -u home-ai -- /opt/home-ai/bin/home-ai "$@"

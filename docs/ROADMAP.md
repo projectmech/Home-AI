@@ -120,3 +120,9 @@ After each session append dated lines with: milestone, files changed, tests run 
 - **CI evidence (commit 04914c4):** CI run #17 Success (3m 57s): the plain `get.sh` default command downloaded the newest release (v0.1.1) with a token, passed real Sigstore verification, and really installed, started and purged it on a runner. USB kit run #1 Success (19s): built the kit (artifact `home-ai-usb-kit`, 61.6 MB zipped) from v0.1.1, installed from it with `sudo bash kit/start.sh`, saw a healthy server with setup open, and removed it.
 - **First end-to-end proof:** the production path (real signed release from GitHub, real Sigstore evidence, real installer) has now worked start to finish on a Linux runner.
 - **Still unproven:** a real USB stick; the Mac mini and Ubuntu Server on a Core 2 Duo; cosign running on that CPU; a real reboot; the wizard in a browser.
+
+## M6 — JARVIS OS (Debian-based image) [PHASE 2 IN PROGRESS]
+Requirements: `prompts/07-JARVIS-OS.md`; decisions: `docs/adr/0004-jarvis-os-architecture.md`. Built inside this repository under `os/`.
+- Phase 1 architecture: written (ADR 0004). Open decision: release signing (Sigstore keyless today vs the requested Ed25519 JRS) — see the reconciliation in prompts/07.
+- Phase 2 minimal bootable image: `os/build.sh` (live-build in a trixie container; verifies the signed release bundle first), `os/test-boot.sh` (QEMU, Core 2 CPU model, BIOS and EFI), workflow `os-image.yml`. **First CI run pending; nothing proven yet.**
+- Not started: installer (d-i + preseed), LUKS2, Clevis/Tang (needs a separate Tang device), jarvis.local (avahi), firmware, OS update layer, recovery image, real-hardware boot test on the Macmini4,1.

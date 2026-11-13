@@ -1,0 +1,7 @@
+systemd-sysv
+iproute2
+iputils-ping
+curl
+ca-certificates
+procps
+less

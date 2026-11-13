@@ -1,0 +1,13 @@
+[Unit]
+Description=JARVIS OS boot self-test (only with jarvis.selftest=1)
+ConditionKernelCommandLine=jarvis.selftest=1
+Wants=home-ai.service
+After=home-ai.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/jarvis/selftest.sh
+TimeoutStartSec=400
+
+[Install]
+WantedBy=multi-user.target
