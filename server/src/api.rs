@@ -19,6 +19,7 @@ use crate::error::ApiError;
 use crate::events::Event;
 use crate::policy::{self, Action, Decision, Role};
 use crate::settings::{self, HomeSettings, SecuritySettings};
+use crate::voice::{self, Intent};
 use crate::{hwdiag, now, ws, AppState};
 
 const CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
@@ -40,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(me))
         .route("/devices", get(list_devices))
         .route("/devices/{id}/actions", post(device_action))
+        .route("/voice/command", post(voice_command))
         .route("/server/metrics", get(server_metrics))
         .route("/server/hardware", get(server_hardware))
         .route("/audit", get(audit_log))
@@ -415,7 +417,19 @@ async fn device_action(
     Path(id): Path<String>,
     Json(req): Json<ActionReq>,
 ) -> Result<Json<Value>, ApiError> {
-    let action = req.action;
+    run_device_action(&s, &user, id, req.action, req.confirm_password)
+        .await
+        .map(Json)
+}
+
+/// The one path every command takes, whether it came from a button or a voice.
+async fn run_device_action(
+    s: &AppState,
+    user: &AuthUser,
+    id: String,
+    action: Action,
+    confirm_password: Option<String>,
+) -> Result<Value, ApiError> {
     let action_name = action.name();
 
     let lookup = id.clone();
@@ -440,10 +454,10 @@ async fn device_action(
             return Err(ApiError::Forbidden(reason.into()));
         }
         Decision::RequireStepUp => {
-            let Some(password) = req.confirm_password else {
+            let Some(password) = confirm_password else {
                 return Err(ApiError::StepUpRequired);
             };
-            if !verify_current_password(&s, &user, password).await? {
+            if !verify_current_password(s, user, password).await? {
                 s.audit(
                     Some(&user.username),
                     action_name,
@@ -472,9 +486,7 @@ async fn device_action(
                 Some(&reason),
             )
             .await;
-            Ok(Json(
-                json!({ "outcome": "failed", "reason": reason, "device": device }),
-            ))
+            Ok(json!({ "outcome": "failed", "reason": reason, "device": device }))
         }
         Ok(new_state) => {
             let lookup = id.clone();
@@ -496,9 +508,55 @@ async fn device_action(
                 None,
             )
             .await;
-            Ok(Json(json!({ "outcome": "confirmed", "device": updated })))
+            Ok(json!({ "outcome": "confirmed", "device": updated }))
         }
     }
+}
+
+// ---- voice ------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct VoiceReq {
+    text: String,
+}
+
+/// Text in, one typed action out, through the same policy path as a button
+/// press. The text is never stored or logged; only that a voice command ran.
+async fn voice_command(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<VoiceReq>,
+) -> Result<Json<Value>, ApiError> {
+    if req.text.chars().count() > 300 {
+        let msg = "That is too long for a voice command.";
+        return Err(ApiError::BadRequest(msg.into()));
+    }
+    let known = s.db.call(|c| devices::list(c)).await?;
+    let reply = match voice::parse(&req.text, &known) {
+        Intent::Say { reply, kind } => json!({ "reply": reply, "outcome": kind }),
+        Intent::Act {
+            device_id,
+            device_name,
+            action,
+            done,
+        } => match run_device_action(&s, &user, device_id, action, None).await {
+            Ok(v) if v["outcome"].as_str() == Some("confirmed") => {
+                json!({ "reply": done, "outcome": "confirmed", "device": v["device"] })
+            }
+            Ok(v) => json!({
+                "reply": format!("{device_name} did not respond."),
+                "outcome": "failed",
+                "device": v["device"],
+            }),
+            Err(ApiError::Forbidden(m)) => json!({ "reply": m, "outcome": "denied" }),
+            Err(ApiError::BadRequest(m)) => json!({ "reply": m, "outcome": "rejected" }),
+            Err(e) => return Err(e),
+        },
+    };
+    let outcome = reply["outcome"].as_str().unwrap_or("none").to_string();
+    let who = Some(user.username.as_str());
+    s.audit(who, "voice_command", None, &outcome, None).await;
+    Ok(Json(reply))
 }
 
 async fn verify_current_password(

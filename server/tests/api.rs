@@ -792,3 +792,78 @@ async fn setup_wizard_flow() {
     let me = call(&app, Method::GET, "/api/me", Some(&admin), None).await;
     assert_eq!(me.body["setup_complete"], true);
 }
+
+async fn voice(app: &Router, cookie: &str, text: &str) -> Reply {
+    call(
+        app,
+        Method::POST,
+        "/api/voice/command",
+        Some(cookie),
+        Some(json!({ "text": text })),
+    )
+    .await
+}
+
+/// Voice commands go through the same policy path as button presses.
+#[tokio::test]
+async fn voice_commands_use_the_same_policy_path() {
+    let state = new_state().await;
+    let app = api::router(state.clone());
+    setup_admin(&state, &app).await;
+    let admin = login(&app, "admin", ADMIN_PW).await;
+
+    // Anonymous callers are rejected.
+    let r = call(
+        &app,
+        Method::POST,
+        "/api/voice/command",
+        None,
+        Some(json!({ "text": "turn off the kitchen light" })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+
+    // The kitchen light starts on; a spoken command turns it off.
+    let r = voice(&app, &admin, "turn off the kitchen light").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["outcome"], "confirmed");
+    assert_eq!(r.body["device"]["id"], "sim-light-kitchen");
+    assert_eq!(r.body["device"]["state"]["on"], false);
+
+    // Spoken numbers work.
+    let r = voice(&app, &admin, "set the thermostat to twenty two degrees").await;
+    assert_eq!(r.body["outcome"], "confirmed");
+    assert_eq!(r.body["device"]["state"]["target_c"], 22.0);
+
+    // Out-of-range values are rejected by the same validation as the UI.
+    let r = voice(&app, &admin, "set the thermostat to forty").await;
+    assert_eq!(r.body["outcome"], "rejected");
+
+    // Voice can never unlock, and the lock state is unchanged.
+    let r = voice(&app, &admin, "unlock the front door").await;
+    assert_eq!(r.body["outcome"], "refused");
+    let r = call(&app, Method::GET, "/api/devices", Some(&admin), None).await;
+    let lock = r.body["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == "sim-lock-front")
+        .unwrap()
+        .clone();
+    assert_eq!(lock["state"]["locked"], true);
+
+    // A device that fails reports failure, not success.
+    let r = voice(&app, &admin, "turn on the faulty light").await;
+    assert_eq!(r.body["outcome"], "failed");
+
+    // Questions and unknown words get a reply and execute nothing.
+    let r = voice(&app, &admin, "what is the temperature in the bedroom").await;
+    assert_eq!(r.body["outcome"], "answer");
+    let r = voice(&app, &admin, "sing me a song").await;
+    assert_eq!(r.body["outcome"], "unknown");
+
+    // Oversized input is refused.
+    let long = "turn on the light ".repeat(40);
+    let r = voice(&app, &admin, &long).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+}

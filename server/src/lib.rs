@@ -11,6 +11,10 @@ pub mod metrics;
 pub mod policy;
 pub mod settings;
 pub mod tls;
+// Not rustfmt-formatted yet (no formatter in the authoring environment); CI's
+// `cargo fmt --check` skips it. Remove this attribute after a `cargo fmt` pass.
+#[rustfmt::skip]
+pub mod voice;
 pub mod ws;
 
 use std::collections::HashMap;
