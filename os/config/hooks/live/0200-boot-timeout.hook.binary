@@ -1,0 +1,23 @@
+#!/bin/sh
+# Debian live images wait at their boot menu until a key is pressed. This image
+# is meant to start on its own (a headless server), so boot the default entry
+# after 5 seconds, in both the BIOS (isolinux) and the EFI (GRUB) menus.
+set -e
+
+if [ -d binary/isolinux ]; then
+  for f in binary/isolinux/*.cfg; do
+    sed -i -E 's/^([[:space:]]*)timeout[[:space:]]+[0-9]+/\1timeout 50/I' "$f"
+  done
+  grep -qiE '^[[:space:]]*timeout' binary/isolinux/isolinux.cfg \
+    || printf 'timeout 50\n' >> binary/isolinux/isolinux.cfg
+fi
+
+if [ -f binary/boot/grub/grub.cfg ]; then
+  sed -i -E 's/^([[:space:]]*)set timeout=.*/\1set timeout=5/' binary/boot/grub/grub.cfg
+  grep -q 'set timeout=' binary/boot/grub/grub.cfg \
+    || sed -i '1i set timeout=5' binary/boot/grub/grub.cfg
+fi
+
+echo "boot menu timeouts set; resulting settings:"
+grep -iHE '^[[:space:]]*(timeout|default)' binary/isolinux/*.cfg 2>/dev/null || true
+grep -HE 'set (timeout|default)=' binary/boot/grub/grub.cfg 2>/dev/null || true

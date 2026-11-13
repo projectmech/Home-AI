@@ -9,12 +9,19 @@ useradd --system --user-group --home-dir /var/lib/home-ai --no-create-home \
 install -d -m 0750 -o root -g home-ai /etc/home-ai
 chown root:home-ai /etc/home-ai/home-ai.env
 chmod 0640 /etc/home-ai/home-ai.env
-chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /opt/home-ai/bin/home-ai
+chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /usr/local/lib/jarvis/banner.sh /opt/home-ai/bin/home-ai
 chown -R root:root /opt/home-ai
+mkdir -p /etc/issue.d
 
 # No default account with a known password: remove live-config's user creation.
 find /lib/live/config -name '*user-setup*' -exec rm -f {} + || true
 
 systemctl enable home-ai.service
+systemctl enable jarvis-banner.service
 systemctl enable jarvis-selftest.service
-systemctl enable systemd-networkd.service || echo "systemd-networkd unit not present; no DHCP in this image"
+
+# DHCP on the wired port is what makes the dashboard reachable. If this unit is
+# missing the image is useless for testing, so fail the build loudly.
+systemctl list-unit-files systemd-networkd.service | grep -q systemd-networkd.service \
+  || { echo "ERROR: systemd-networkd is not in this image" >&2; exit 1; }
+systemctl enable systemd-networkd.service

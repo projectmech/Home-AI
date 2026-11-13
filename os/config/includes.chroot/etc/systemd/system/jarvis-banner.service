@@ -1,0 +1,17 @@
+[Unit]
+Description=Show the JARVIS OS address and setup token on the console
+After=home-ai.service systemd-networkd.service
+Wants=home-ai.service
+Before=getty.target getty@tty1.service serial-getty@ttyS0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/jarvis/banner.sh
+TimeoutStartSec=150
+StandardInput=null
+# The output contains the setup token: keep it out of the journal.
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

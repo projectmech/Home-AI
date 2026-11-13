@@ -5,3 +5,4 @@ curl
 ca-certificates
 procps
 less
+avahi-daemon

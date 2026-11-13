@@ -14,7 +14,10 @@ mkdir -p /build/lb /stage/out
 cd /build/lb
 
 # console=ttyS0 comes last so /dev/console is the serial port in a VM.
-APPEND="boot=live components hostname=jarvis console=tty0 console=ttyS0,115200n8"
+# nomodeset: keep the plain firmware framebuffer for the text console; the
+# 2010 Mac mini's NVIDIA graphics is not needed on a headless server and a
+# native-mode graphics driver is the most likely cause of a black screen.
+APPEND="boot=live components hostname=jarvis nomodeset console=tty0 console=ttyS0,115200n8"
 if [ "${SELFTEST:-0}" = "1" ]; then APPEND="$APPEND jarvis.selftest=1"; fi
 
 lb config \
