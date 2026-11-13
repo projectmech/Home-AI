@@ -60,12 +60,12 @@ jobs:
             -extract /isolinux isox/isolinux -extract /boot/grub isox/grub 2>&1 | tail -n 3 || true
           {
             echo '### Boot menu configuration inside the ISO'
-            for f in isox/isolinux/*.cfg isox/grub/grub.cfg; do
+            for f in isox/isolinux/*.cfg isox/grub/config.cfg isox/grub/grub.cfg; do
               [ -f "$f" ] || continue
               echo "#### $f"; echo '```'; head -n 70 "$f"; echo '```'
             done
           } >> "$GITHUB_STEP_SUMMARY"
-          MSG=$( { echo "files: $(ls isox/isolinux 2>/dev/null | tr '\n' ' ') | $(ls isox/grub 2>/dev/null | tr '\n' ' ')"; grep -HiE '^[[:space:]]*(timeout|default|ontimeout|prompt|menu default|label|include)|set (timeout|default)' isox/isolinux/*.cfg isox/grub/grub.cfg 2>/dev/null | head -n 40; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          MSG=$( { echo "files: $(ls isox/isolinux 2>/dev/null | tr '\n' ' ') | $(ls isox/grub 2>/dev/null | tr '\n' ' ')"; grep -HiE '^[[:space:]]*(timeout|default|ontimeout|prompt|menu default|label|include)|set (timeout|default)' isox/isolinux/*.cfg isox/grub/config.cfg isox/grub/grub.cfg 2>/dev/null | head -n 40; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::warning title=boot menu settings found in the ISO::$MSG"
 
       - name: Install QEMU and firmware

@@ -38,5 +38,38 @@ cp -a /stage/config/. config/
 lb build
 
 ISO=$(ls /build/lb/*.iso | head -n 1)
+
+# ---- start by itself: boot the default entry after 5 seconds ------------------
+# Debian live menus wait forever for a key (isolinux "timeout 0"; GRUB with no
+# timeout), which is wrong for a headless server. A live-build hook for this
+# did not run, so the finished ISO is patched instead: two small text files are
+# replaced and the boot records (BIOS, EFI, hybrid MBR) are replayed unchanged.
+PATCH=/tmp/bootpatch
+rm -rf "$PATCH"; mkdir -p "$PATCH"
+xorriso -osirrox on -indev "$ISO" \
+  -extract /isolinux/isolinux.cfg "$PATCH/isolinux.cfg" \
+  -extract /boot/grub/config.cfg "$PATCH/config.cfg" \
+  -extract /boot/grub/grub.cfg "$PATCH/grub.cfg"
+
+# isolinux (BIOS): 50 tenths of a second.
+sed -i -E 's/^([[:space:]]*)timeout[[:space:]]+[0-9]+/\1timeout 50/I' "$PATCH/isolinux.cfg"
+grep -qiE '^[[:space:]]*timeout[[:space:]]+50' "$PATCH/isolinux.cfg" || printf 'timeout 50\n' >> "$PATCH/isolinux.cfg"
+
+# GRUB (EFI): timeout in seconds, set in config.cfg and, to be sure, at the top of grub.cfg.
+sed -i -E 's/^([[:space:]]*)set[[:space:]]+timeout=.*/\1set timeout=5/' "$PATCH/config.cfg" "$PATCH/grub.cfg"
+grep -q 'set timeout=5' "$PATCH/config.cfg" || printf 'set timeout=5\n' >> "$PATCH/config.cfg"
+grep -q 'set timeout=5' "$PATCH/grub.cfg" || sed -i '1i set timeout=5' "$PATCH/grub.cfg"
+
+xorriso -indev "$ISO" -outdev "$ISO.patched" \
+  -boot_image any replay \
+  -map "$PATCH/isolinux.cfg" /isolinux/isolinux.cfg \
+  -map "$PATCH/config.cfg" /boot/grub/config.cfg \
+  -map "$PATCH/grub.cfg" /boot/grub/grub.cfg \
+  -commit
+mv "$ISO.patched" "$ISO"
+echo "boot menu timeouts after patching:"
+grep -iHE '^[[:space:]]*timeout' "$PATCH/isolinux.cfg" || true
+grep -HE 'set timeout=' "$PATCH/config.cfg" "$PATCH/grub.cfg" || true
+
 cp "$ISO" /stage/out/jarvis-os-amd64.iso
 chown -R "${HOST_UID:-0}:${HOST_GID:-0}" /stage
