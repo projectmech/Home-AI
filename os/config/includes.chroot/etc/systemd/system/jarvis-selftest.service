@@ -5,9 +5,12 @@ Wants=home-ai.service
 After=home-ai.service network.target
 
 [Service]
-Type=oneshot
+# simple, not oneshot: a oneshot would hold the boot open, and the script waits
+# for the boot to finish.
+Type=simple
 ExecStart=/usr/local/lib/jarvis/selftest.sh
 TimeoutStartSec=400
+StandardInput=null
 
 [Install]
 WantedBy=multi-user.target
