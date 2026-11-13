@@ -1,0 +1,23 @@
+[Unit]
+Description=JARVIS OS recovery shell (only when started from the Recovery entry)
+ConditionKernelCommandLine=jarvis.recover=1
+After=systemd-user-sessions.service
+Before=getty@tty1.service
+Conflicts=getty@tty1.service
+
+[Service]
+# A root shell on the console of the installer medium. Whoever can start this
+# medium has the computer in their hands anyway; the installed disk stays
+# encrypted and is not opened until you unlock it by hand (cryptsetup open).
+Type=simple
+ExecStartPre=/bin/sh -c 'printf "\\nJARVIS OS recovery shell (root). The installed disk is still encrypted.\\n  Unlock it:  cryptsetup open /dev/sdXN jarvisroot   then  mount /dev/mapper/jarvisroot /mnt\\n  Leave:      poweroff\\n\\n"'
+ExecStart=/bin/bash -l
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target

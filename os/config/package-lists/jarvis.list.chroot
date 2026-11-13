@@ -7,3 +7,17 @@ procps
 less
 avahi-daemon
 pciutils
+bash
+initramfs-tools
+cryptsetup
+cryptsetup-initramfs
+parted
+dosfstools
+e2fsprogs
+squashfs-tools
+smartmontools
+grub2-common
+grub-common
+grub-pc-bin
+grub-efi-amd64-bin
+efibootmgr

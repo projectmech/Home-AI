@@ -1,0 +1,280 @@
+#!/bin/bash
+# JARVIS OS installer.
+#
+# Runs on the console of the live image when it was started from the boot menu
+# entry "Install JARVIS OS" (kernel parameter jarvis.install=1). It never runs
+# by itself from the default entry, and it never touches a disk until you have
+# typed the confirmation for that exact disk.
+#
+# What it does: partitions the chosen disk, encrypts the root filesystem with
+# LUKS2, copies this system onto it, installs the GRUB boot loader (BIOS or
+# EFI, whichever this computer was started in), and prints a one-time recovery
+# key. Nothing secret is written to the installed disk in plain text.
+#
+# jarvis.install=auto is for automated tests only (see docs/INSTALLER.md): it
+# reads the disk, an exact confirmation string and a passphrase from the kernel
+# command line, so anyone who can edit the boot command line could erase a disk
+# with it. That is no more than they could do by running this installer.
+set -Eeuo pipefail
+export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+sysctl -q -w kernel.printk_devkmsg=on 2>/dev/null || true
+LOG=/var/log/jarvis-install.log
+: > "$LOG"
+log()  { printf '%s\n' "$*" | tee -a "$LOG"; }
+kmsg() { printf 'jarvis-install: %s\n' "$*" > /dev/kmsg 2>/dev/null || true; }
+say()  { log "$*"; kmsg "$*"; }
+die()  { say "ERROR: $*"; return 1; }
+
+cmdline_value() { tr ' ' '\n' < /proc/cmdline | sed -n "s/^$1=//p" | head -n 1; }
+AUTO=0; [ "$(cmdline_value jarvis.install)" = "auto" ] && AUTO=1
+
+TARGET=/target
+MAPNAME=jarvisroot
+WORK=/run/jarvis-install
+STEP="starting"
+
+cleanup() {
+  set +e
+  sync
+  umount -R "$TARGET" 2>/dev/null
+  cryptsetup close "$MAPNAME" 2>/dev/null
+  rm -rf "$WORK"
+}
+fail_trap() {
+  rc=$?
+  say "JARVIS-INSTALL: FAIL (step: $STEP, exit $rc)"
+  cleanup
+  exit "$rc"
+}
+trap fail_trap ERR
+
+part() { case "$DISK" in *nvme*|*mmcblk*|*loop*) printf '%sp%s' "$DISK" "$1" ;; *) printf '%s%s' "$DISK" "$1" ;; esac; }
+ask()  { local reply; read -r -p "$1" reply || reply=""; printf '%s' "$reply"; }
+
+[ "$(id -u)" -eq 0 ] || die "must run as root"
+if [ "$AUTO" = 0 ]; then clear 2>/dev/null || true; fi
+log "=============================================================================="
+log " JARVIS OS installer"
+log "=============================================================================="
+
+if [ -d /sys/firmware/efi ]; then BOOTMODE=efi; else BOOTMODE=bios; fi
+say "Boot mode of this computer: $BOOTMODE ($([ "$BOOTMODE" = efi ] && echo 'EFI, GPT partitions' || echo 'legacy BIOS, MBR partitions'))"
+say "The installed system will start the same way. To switch, start the installer in the other mode."
+
+# ---- the target disk ----------------------------------------------------------
+STEP="finding disks"
+LIVEDISK=""
+src=$(findmnt -no SOURCE /run/live/medium 2>/dev/null || true)
+if [ -n "$src" ]; then
+  LIVEDISK=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n 1 || true)
+  [ -n "$LIVEDISK" ] || LIVEDISK=${src#/dev/}
+fi
+mapfile -t DISKS < <(lsblk -dnpb -o NAME,TYPE,RM,SIZE 2>/dev/null \
+  | awk -v live="/dev/$LIVEDISK" '$2=="disk" && $3==0 && $1!=live && $4>=8589934592 {print $1}')
+[ "${#DISKS[@]}" -gt 0 ] || die "no usable disk found (needs an internal disk of at least 8 GB that is not the installer medium)"
+
+describe() {
+  local d=$1 n model rot t size
+  n=${d#/dev/}
+  model=$(tr -s ' ' < "/sys/block/$n/device/model" 2>/dev/null || true); [ -n "$model" ] || model="unknown model"
+  rot=$(cat "/sys/block/$n/queue/rotational" 2>/dev/null || echo "?")
+  case "$rot" in 0) t="SSD";; 1) t="hard disk";; *) t="type unknown";; esac
+  size=$(lsblk -dno SIZE "$d")
+  printf '%s  %s  %s  [%s]' "$d" "$size" "$model" "$t"
+}
+
+if [ "$AUTO" = 1 ]; then
+  DISK=$(cmdline_value jarvis.install.disk)
+  [ -n "$DISK" ] || die "auto mode needs jarvis.install.disk"
+  printf '%s\n' "${DISKS[@]}" | grep -qx "$DISK" || die "$DISK is not an allowed disk"
+else
+  log ""
+  log "Disks this installer may erase (the installer medium and removable disks are not listed):"
+  i=1; for d in "${DISKS[@]}"; do log "  $i) $(describe "$d")"; i=$((i + 1)); done
+  log ""
+  choice=$(ask "Install onto which disk? Enter its number, or q to quit: ")
+  case "$choice" in q|Q|"") say "Cancelled. Nothing was changed."; trap - ERR; exit 0 ;; esac
+  [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#DISKS[@]}" ] || die "not a valid choice"
+  DISK=${DISKS[$((choice - 1))]}
+  if command -v smartctl >/dev/null 2>&1; then
+    health=$(smartctl -H "$DISK" 2>/dev/null | sed -n 's/^SMART overall-health.*: //p; s/^SMART Health Status: //p' | head -n 1)
+    log "Disk health (SMART): ${health:-not available for this disk}"
+    case "$health" in PASSED|OK|"") ;; *) log "WARNING: the disk does not report a healthy state."; ;; esac
+  fi
+fi
+say "Target disk: $(describe "$DISK")"
+
+STEP="confirming"
+if [ "$AUTO" = 1 ]; then
+  [ "$(cmdline_value jarvis.install.erase)" = "ERASE-$DISK" ] || die "auto mode needs jarvis.install.erase=ERASE-$DISK"
+else
+  log ""
+  log "!!! EVERYTHING ON $DISK WILL BE ERASED. This cannot be undone. !!!"
+  ans=$(ask "To continue type exactly:  ERASE $DISK   (anything else cancels): ")
+  [ "$ans" = "ERASE $DISK" ] || { say "Cancelled. Nothing was changed."; trap - ERR; exit 0; }
+fi
+
+# ---- passphrase and recovery key ----------------------------------------------
+STEP="passphrase"
+install -d -m 700 "$WORK"
+if [ "$AUTO" = 1 ]; then
+  PASS=$(cmdline_value jarvis.install.pass)
+  [ "${#PASS}" -ge 12 ] || die "auto mode needs jarvis.install.pass of at least 12 characters"
+else
+  log ""
+  log "Choose the passphrase that unlocks this disk every time the computer starts"
+  log "(at least 12 characters). If you forget it AND lose the recovery key, the data is gone."
+  while :; do
+    read -r -s -p "Passphrase: " P1; echo
+    read -r -s -p "Again:      " P2; echo
+    if [ "${#P1}" -lt 12 ]; then log "Too short: at least 12 characters."; continue; fi
+    if [ "$P1" != "$P2" ]; then log "They do not match."; continue; fi
+    PASS=$P1; break
+  done
+fi
+RECOVERY=$( { set +o pipefail; tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 32 | fold -w4 | paste -sd- -; } )
+[ "${#RECOVERY}" -eq 39 ] || die "could not generate a recovery key"
+umask 077
+printf '%s' "$PASS" > "$WORK/pass"
+printf '%s' "$RECOVERY" > "$WORK/recovery"
+
+if [ "$AUTO" = 0 ]; then
+  log ""
+  log "RECOVERY KEY (shown once, never stored on this computer):"
+  log ""
+  printf '    %s\n\n' "$RECOVERY"
+  log "Write it down and keep it somewhere safe and separate. It unlocks the disk if you"
+  log "forget the passphrase. Anyone who has it can read your data."
+  while :; do
+    again=$(ask "Type the recovery key again to prove you have it: ")
+    [ "$again" = "$RECOVERY" ] && break
+    log "That is not the same. Check what you wrote down."
+  done
+else
+  kmsg "JARVIS-INSTALL: RECOVERY-KEY $RECOVERY"
+fi
+
+# ---- partitions ----------------------------------------------------------------
+STEP="partitioning"
+say "Partitioning $DISK"
+for p in $(lsblk -lnpo NAME "$DISK" | tail -n +2); do umount "$p" 2>/dev/null || true; done
+wipefs -af "$DISK" >/dev/null
+if [ "$BOOTMODE" = efi ]; then
+  parted -s "$DISK" mklabel gpt \
+    mkpart ESP fat32 1MiB 513MiB set 1 esp on \
+    mkpart boot ext4 513MiB 1537MiB \
+    mkpart cryptroot 1537MiB 100%
+  ESPP=$(part 1); BOOTP=$(part 2); ROOTP=$(part 3)
+else
+  parted -s "$DISK" mklabel msdos \
+    mkpart primary ext4 1MiB 1025MiB set 1 boot on \
+    mkpart primary 1025MiB 100%
+  ESPP=""; BOOTP=$(part 1); ROOTP=$(part 2)
+fi
+udevadm settle --timeout=30 || true
+partprobe "$DISK" || true
+for p in $ESPP $BOOTP $ROOTP; do
+  for _ in $(seq 1 30); do [ -b "$p" ] && break; sleep 1; done
+  [ -b "$p" ] || die "partition $p did not appear"
+done
+
+# ---- encryption ----------------------------------------------------------------
+STEP="encrypting"
+say "Creating the encrypted volume (LUKS2)"
+cryptsetup luksFormat --type luks2 --batch-mode --key-file "$WORK/pass" "$ROOTP"
+cryptsetup luksAddKey --key-file "$WORK/pass" "$ROOTP" "$WORK/recovery"
+cryptsetup open --key-file "$WORK/pass" "$ROOTP" "$MAPNAME"
+
+STEP="formatting"
+say "Creating filesystems"
+mkfs.ext4 -q -F -L jarvis-root "/dev/mapper/$MAPNAME"
+mkfs.ext4 -q -F -L jarvis-boot "$BOOTP"
+[ -z "$ESPP" ] || mkfs.vfat -F 32 -n JARVISEFI "$ESPP" >/dev/null
+
+STEP="mounting"
+mkdir -p "$TARGET"
+mount "/dev/mapper/$MAPNAME" "$TARGET"
+mkdir -p "$TARGET/boot"
+mount "$BOOTP" "$TARGET/boot"
+if [ -n "$ESPP" ]; then mkdir -p "$TARGET/boot/efi"; mount "$ESPP" "$TARGET/boot/efi"; fi
+
+# ---- copy the system -------------------------------------------------------------
+STEP="copying the system"
+SQ=/run/live/medium/live/filesystem.squashfs
+[ -f "$SQ" ] || SQ=/lib/live/mount/medium/live/filesystem.squashfs
+[ -f "$SQ" ] || die "cannot find the system image on the installer medium"
+say "Copying the system (a few minutes)"
+unsquashfs -q -f -d "$TARGET" "$SQ"
+mkdir -p "$TARGET"/{dev,proc,sys,run,tmp}
+
+# ---- configure the installed system -----------------------------------------------
+STEP="configuring"
+say "Configuring the installed system"
+ROOT_UUID=$(blkid -s UUID -o value "$ROOTP")
+BOOT_UUID=$(blkid -s UUID -o value "$BOOTP")
+{
+  echo "# JARVIS OS"
+  echo "/dev/mapper/$MAPNAME / ext4 errors=remount-ro 0 1"
+  echo "UUID=$BOOT_UUID /boot ext4 defaults 0 2"
+  [ -z "$ESPP" ] || echo "UUID=$(blkid -s UUID -o value "$ESPP") /boot/efi vfat umask=0077 0 1"
+} > "$TARGET/etc/fstab"
+echo "$MAPNAME UUID=$ROOT_UUID none luks" > "$TARGET/etc/crypttab"
+echo jarvis > "$TARGET/etc/hostname"
+printf '127.0.0.1 localhost\n127.0.1.1 jarvis\n' > "$TARGET/etc/hosts"
+echo "RESUME=none" > "$TARGET/etc/initramfs-tools/conf.d/resume"
+
+if [ "$AUTO" = 1 ]; then CONSOLE="console=tty0 console=ttyS0,115200n8"; else CONSOLE="console=ttyS0,115200n8 console=tty0"; fi
+cat > "$TARGET/etc/default/grub" <<EOF
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=5
+GRUB_DISTRIBUTOR="JARVIS OS"
+GRUB_CMDLINE_LINUX_DEFAULT="nomodeset $CONSOLE"
+GRUB_CMDLINE_LINUX=""
+GRUB_DISABLE_OS_PROBER=true
+EOF
+
+for m in dev proc sys run; do mount --rbind "/$m" "$TARGET/$m"; mount --make-rslave "$TARGET/$m"; done
+
+STEP="removing live-only packages"
+chroot "$TARGET" /bin/bash -c '
+  for p in live-boot live-boot-initramfs-tools live-config live-config-systemd live-tools; do
+    dpkg -s "$p" >/dev/null 2>&1 && dpkg --purge --force-depends "$p" || true
+  done
+'
+
+STEP="building the initramfs"
+say "Building the boot files"
+chroot "$TARGET" update-initramfs -u -k all
+
+STEP="installing the boot loader"
+say "Installing the boot loader ($BOOTMODE)"
+if [ "$BOOTMODE" = efi ]; then
+  chroot "$TARGET" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
+else
+  chroot "$TARGET" grub-install --target=i386-pc --recheck "$DISK"
+fi
+chroot "$TARGET" update-grub
+
+STEP="checking"
+ls "$TARGET"/boot/vmlinuz-* >/dev/null
+ls "$TARGET"/boot/initrd.img-* >/dev/null
+grep -q "root=/dev/mapper/$MAPNAME" "$TARGET/boot/grub/grub.cfg" || die "grub.cfg does not point at the encrypted root"
+[ -x "$TARGET/opt/home-ai/bin/home-ai" ] || die "the JARVIS core is missing from the installed system"
+
+STEP="finishing"
+say "Finishing"
+trap - ERR
+cleanup
+say "JARVIS-INSTALL: DONE"
+
+if [ "$AUTO" = 1 ]; then
+  sleep 2; systemctl poweroff
+else
+  log ""
+  log "JARVIS OS is installed. Remove the installer USB stick, then restart."
+  log "At start-up the computer asks for your passphrase. After that, the screen shows"
+  log "the address and a setup token: open the address from another computer."
+  ask "Press Enter to restart now. " >/dev/null
+  systemctl reboot
+fi

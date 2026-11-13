@@ -95,6 +95,19 @@ jobs:
           need '(sbin|bin)/avahi-daemon$' 'jarvis.local (avahi)'
           need 'bin/lspci$' 'lspci (network chip listing)'
           need 'bin/curl$' 'curl'
+          need 'squashfs-root/usr/local/sbin/jarvis-install$' 'installer script'
+          need 'squashfs-root/etc/systemd/system/jarvis-installer.service$' 'installer unit'
+          need 'squashfs-root/etc/systemd/system/jarvis-recovery.service$' 'recovery unit'
+          need '(sbin|bin)/cryptsetup$' 'cryptsetup (LUKS2)'
+          need 'initramfs-tools/hooks/cryptroot$' 'initramfs unlock hook (cryptsetup-initramfs)'
+          need '(sbin|bin)/grub-install$' 'grub-install'
+          need 'lib/grub/i386-pc/' 'GRUB for legacy BIOS'
+          need 'lib/grub/x86_64-efi/' 'GRUB for EFI'
+          need '(sbin|bin)/parted$' 'parted'
+          need '(sbin|bin)/mkfs\.vfat$' 'mkfs.vfat'
+          need '(sbin|bin)/mkfs\.ext4$' 'mkfs.ext4'
+          need '(sbin|bin)/unsquashfs$' 'unsquashfs'
+          need '(sbin|bin)/smartctl$' 'smartctl (disk health)'
           forbid '(sbin|bin)/sshd$' 'SSH server'
           forbid 'usr/bin/sudo$' 'sudo'
           forbid 'etc/sudoers\.d/jarvis-admin' 'sudoers entry for jarvis-admin'
@@ -156,5 +169,45 @@ jobs:
           path: |
             serial-*.log
             screen-*.ppm
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Real installs in virtual machines: install onto an empty disk, reboot from
+  # the installed disk through the real boot loader, unlock the encrypted root
+  # (passphrase in BIOS mode, recovery key in EFI mode), create the
+  # administrator, reboot again and check the data persisted.
+  install:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: bios
+            unlock: pass
+          - mode: efi
+            unlock: recovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jarvis-os-live-iso
+          path: out
+      - name: Install QEMU and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf socat xorriso
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+      - name: Install test (${{ matrix.mode }}, unlock with ${{ matrix.unlock }})
+        run: bash os/test-install.sh out/jarvis-os-amd64.iso ${{ matrix.mode }} ${{ matrix.unlock }}
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: os-install-logs-${{ matrix.mode }}
+          path: install-*.log
           if-no-files-found: ignore
           retention-days: 14

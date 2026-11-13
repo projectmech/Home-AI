@@ -1,5 +1,9 @@
 [Unit]
 Description=Show the JARVIS OS address and setup token on the console
+# Not while the installer or the recovery shell owns the console.
+ConditionKernelCommandLine=!jarvis.install=1
+ConditionKernelCommandLine=!jarvis.install=auto
+ConditionKernelCommandLine=!jarvis.recover=1
 After=home-ai.service systemd-networkd.service
 Wants=home-ai.service
 Before=getty.target getty@tty1.service serial-getty@ttyS0.service

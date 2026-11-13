@@ -56,6 +56,7 @@ PATCH=/tmp/bootpatch
 rm -rf "$PATCH"; mkdir -p "$PATCH"
 xorriso -osirrox on -indev "$ISO" \
   -extract /isolinux/isolinux.cfg "$PATCH/isolinux.cfg" \
+  -extract /isolinux/live.cfg "$PATCH/live.cfg" \
   -extract /boot/grub/config.cfg "$PATCH/config.cfg" \
   -extract /boot/grub/grub.cfg "$PATCH/grub.cfg"
 
@@ -68,8 +69,39 @@ sed -i -E 's/^([[:space:]]*)set[[:space:]]+timeout=.*/\1set timeout=5/' "$PATCH/
 grep -q 'set timeout=5' "$PATCH/config.cfg" || printf 'set timeout=5\n' >> "$PATCH/config.cfg"
 grep -q 'set timeout=5' "$PATCH/grub.cfg" || sed -i '1i set timeout=5' "$PATCH/grub.cfg"
 
+# ---- two extra menu entries: Install and Recovery ----------------------------
+# The default entry stays "Live system": nothing is ever installed or erased by
+# just starting the medium. The installer runs only from its own entry.
+APPEND_BASE="boot=live components hostname=jarvis nomodeset console=tty0"
+cat >> "$PATCH/live.cfg" <<EOF
+
+label jarvis-install
+	menu label ^Install JARVIS OS (erases a disk you choose)
+	linux /live/vmlinuz
+	initrd /live/initrd.img
+	append $APPEND_BASE jarvis.install=1
+
+label jarvis-recovery
+	menu label ^Recovery shell (root, installer medium only)
+	linux /live/vmlinuz
+	initrd /live/initrd.img
+	append $APPEND_BASE jarvis.recover=1
+EOF
+cat >> "$PATCH/grub.cfg" <<EOF
+
+menuentry "Install JARVIS OS (erases a disk you choose)" {
+	linux /live/vmlinuz $APPEND_BASE jarvis.install=1
+	initrd /live/initrd.img
+}
+menuentry "Recovery shell (root, installer medium only)" {
+	linux /live/vmlinuz $APPEND_BASE jarvis.recover=1
+	initrd /live/initrd.img
+}
+EOF
+
 xorriso -indev "$ISO" -outdev "$ISO.patched" \
   -boot_image any replay \
+  -map "$PATCH/live.cfg" /isolinux/live.cfg \
   -map "$PATCH/isolinux.cfg" /isolinux/isolinux.cfg \
   -map "$PATCH/config.cfg" /boot/grub/config.cfg \
   -map "$PATCH/grub.cfg" /boot/grub/grub.cfg \

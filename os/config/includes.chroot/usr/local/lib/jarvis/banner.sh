@@ -57,10 +57,18 @@ done < /tmp/pci-net.txt
 rm -f /tmp/pci-net.txt
 dbg "net:$(printf '%s' "$NETINFO" | tr '\n' ' ')"
 
+if [ -d /run/live ]; then
+  TITLE="JARVIS OS - live test image. Nothing is installed on this computer's disk."
+  NOTE="Everything you set up is kept in memory only and is lost at power-off."
+else
+  TITLE="JARVIS OS"
+  NOTE="Your data is kept on this computer's encrypted disk."
+fi
+
 TEXT=$(cat <<EOF
 
 ==============================================================================
- JARVIS OS - live test image. Nothing is installed on this computer's disk.
+ $TITLE
 ==============================================================================
  Open this on another computer on the same network:
 
@@ -76,7 +84,7 @@ TEXT=$(cat <<EOF
  fingerprint in the browser's warning with the one above, and continue only
  if they are identical.
 
- Everything you set up is kept in memory only and is lost at power-off.
+ $NOTE
 ==============================================================================
 
 EOF

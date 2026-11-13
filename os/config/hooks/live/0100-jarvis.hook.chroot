@@ -9,7 +9,7 @@ useradd --system --user-group --home-dir /var/lib/home-ai --no-create-home \
 install -d -m 0750 -o root -g home-ai /etc/home-ai
 chown root:home-ai /etc/home-ai/home-ai.env
 chmod 0640 /etc/home-ai/home-ai.env
-chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /usr/local/lib/jarvis/banner.sh /opt/home-ai/bin/home-ai
+chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /usr/local/lib/jarvis/banner.sh /opt/home-ai/bin/home-ai /usr/local/sbin/jarvis-install
 chown -R root:root /opt/home-ai
 mkdir -p /etc/issue.d
 
@@ -19,6 +19,9 @@ find /lib/live/config -name '*user-setup*' -exec rm -f {} + || true
 systemctl enable home-ai.service
 systemctl enable jarvis-banner.service
 systemctl enable jarvis-selftest.service
+# Both are inert unless the matching boot menu entry added its kernel parameter.
+systemctl enable jarvis-installer.service
+systemctl enable jarvis-recovery.service
 
 # DHCP on the wired port is what makes the dashboard reachable. If this unit is
 # missing the image is useless for testing, so fail the build loudly.
