@@ -26,3 +26,9 @@ CI bakes `jarvis.selftest=1` into the boot entry so the VM needs no keyboard. A 
 
 ## Next phases (from prompts/07)
 3 installer (d-i + preseed, UEFI/BIOS detection, LUKS2) → 4/5 install-time JARVIS integration and wizard → 7 Clevis/Tang with a separate Tang device, tested in VMs → 10 update infrastructure (see the signing conflict in prompts/07) → 12 real-hardware validation with the user's approval for any destructive step.
+
+## Addendum 2026-11-13 — what the first runs taught
+- Debian live images wait at their boot menu until a key is pressed; the VM test presses Enter through the QEMU monitor. A real appliance ISO will want a short auto-boot timeout, to be decided with the installer.
+- A boot self-test must not write to a serial tty it does not own: the serial login prompt takes the port over and hangs up other holders. Use the kernel log (`/dev/kmsg`, with `kernel.printk_devkmsg=on`), which reaches every console.
+- A self-test unit must not be `Type=oneshot` if it waits for boot to complete.
+- Result: BIOS and EFI boot tests both pass under `-cpu Penryn` (run 43421607888). Still not evidence about the real Mac mini.
