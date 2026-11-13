@@ -45,11 +45,16 @@ for d in /sys/class/net/*; do
   NETINFO="$NETINFO
  Network:     $n  driver=$drv  state=${st:-?}  $link"
 done
-if [ -z "$NETINFO" ]; then
-  PCI=$(lspci -nn 2>/dev/null | grep -iE 'ethernet|network' | sed 's/^[^ ]* //' | tr '\n' ';')
-  NETINFO="
- Network:     NO NETWORK INTERFACE FOUND. PCI network devices: ${PCI:-none listed}"
-fi
+[ -n "$NETINFO" ] || NETINFO="
+ Network:     NO NETWORK INTERFACE FOUND"
+# The network chips the computer has, wired and wireless, with their PCI ids
+# (vendor:device), whether or not any driver claimed them.
+lspci -nn 2>/dev/null | grep -iE 'ethernet|network' | sed 's/^[^ ]* //' > /tmp/pci-net.txt
+while IFS= read -r line; do
+  NETINFO="$NETINFO
+ Hardware:    $line"
+done < /tmp/pci-net.txt
+rm -f /tmp/pci-net.txt
 dbg "net:$(printf '%s' "$NETINFO" | tr '\n' ' ')"
 
 TEXT=$(cat <<EOF
