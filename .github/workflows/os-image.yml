@@ -79,11 +79,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # Saved even when a boot test fails, so the image can be inspected or
+      # tried by hand. The artifact name says whether it passed: look at the
+      # run's result. Test build only (self-test boot parameter, no installer).
       - name: Keep the test ISO
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: jarvis-os-selftest-iso
           path: |
             out/jarvis-os-amd64.iso
             out/jarvis-os-amd64.iso.sha256
+          if-no-files-found: ignore
           retention-days: 7
