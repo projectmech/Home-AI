@@ -43,24 +43,26 @@ jobs:
       - name: Install QEMU and firmware
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf socat
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
           ls -l /dev/kvm || echo "no /dev/kvm: tests run under software emulation"
 
       - name: Boot test, BIOS
-        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 900
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 600
 
       - name: Boot test, EFI
-        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 900
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 600
 
-      - name: Keep the serial logs
+      - name: Keep the serial logs and screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: os-serial-logs
-          path: serial-*.log
+          name: os-boot-logs
+          path: |
+            serial-*.log
+            screen-*.ppm
           if-no-files-found: ignore
           retention-days: 14
 

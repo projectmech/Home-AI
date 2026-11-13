@@ -12,9 +12,13 @@ set -euo pipefail
 
 ISO=$(readlink -f "${1:?usage: test-boot.sh <iso> <bios|efi> [timeout]}")
 MODE=${2:?usage: test-boot.sh <iso> <bios|efi> [timeout]}
-TIMEOUT=${3:-900}
+TIMEOUT=${3:-600}
 LOG="serial-$MODE.log"
+SOCK="$(mktemp -u /tmp/qmon.XXXXXX).sock"
 : > "$LOG"
+
+# Send a command to the QEMU monitor (keyboard input, screenshots).
+monitor() { printf 
 
 ACCEL=tcg
 if [ -w /dev/kvm ]; then ACCEL=kvm; fi
@@ -22,6 +26,7 @@ echo "mode=$MODE accel=$ACCEL cpu=Penryn timeout=${TIMEOUT}s"
 
 ARGS=(-machine "pc,accel=$ACCEL" -cpu Penryn -smp 2 -m 1536
       -display none -serial "file:$LOG" -no-reboot
+      -monitor "unix:$SOCK,server=on,wait=off"
       -cdrom "$ISO" -boot d
       -netdev user,id=n0 -device e1000,netdev=n0)
 
@@ -43,13 +48,23 @@ trap 'kill "$QPID" 2>/dev/null || true' EXIT
 
 RESULT="TIMEOUT"
 START=$SECONDS
+LASTKEY=-100
 while [ $((SECONDS - START)) -lt "$TIMEOUT" ]; do
+  # Debian live images wait at their boot menu until a key is pressed. Press
+  # Enter every 10 s for the first two minutes; it selects the default entry
+  # and is ignored once the kernel is running.
+  ELAPSED=$((SECONDS - START))
+  if [ "$ELAPSED" -lt 120 ] && [ $((ELAPSED - LASTKEY)) -ge 10 ]; then
+    monitor "sendkey ret"
+    LASTKEY=$ELAPSED
+  fi
   if grep -q 'JARVIS-SELFTEST: PASS' "$LOG"; then RESULT=PASS; break; fi
   if grep -q 'JARVIS-SELFTEST: FAIL' "$LOG"; then RESULT=FAIL; break; fi
   kill -0 "$QPID" 2>/dev/null || { RESULT="VM-EXITED"; break; }
   sleep 5
 done
 
+if [ "$RESULT" != "PASS" ]; then monitor "screendump screen-$MODE.ppm"; sleep 2; fi
 echo "---- serial console (last 70 lines) ----"
 tail -n 70 "$LOG" | tr -d '\r'
 echo "----------------------------------------"
