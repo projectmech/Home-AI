@@ -2,6 +2,7 @@
   import type { Device, User } from '../lib/api';
   import { live } from '../lib/live.svelte';
   import DeviceCard from '../components/DeviceCard.svelte';
+  import VoiceBox from '../components/VoiceBox.svelte';
 
   let { user }: { user: User } = $props();
 
@@ -44,6 +45,10 @@
       </p>
     </div>
   </section>
+
+  {#if user.role !== 'restricted'}
+    <VoiceBox />
+  {/if}
 
   {#each rooms as [room, devices] (room)}
     <section>

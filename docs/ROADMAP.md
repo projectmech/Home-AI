@@ -159,3 +159,9 @@ Requirements: `prompts/07-JARVIS-OS.md`; decisions: `docs/adr/0004-jarvis-os-arc
 - **Caveat:** the job status is Success and the script exits non-zero on any failed check; the log's final PASS line was not read (logs need sign-in).
 - **Not proven:** real hardware; wrong-passphrase and interrupted-install behaviour; Wi-Fi; voice; AI; connectors; signed ISO; Tang. A real install over the Ubuntu Server needs explicit approval.
 - **Next:** user boots the live ISO on the Mac mini and reports the console `Hardware:` lines; then decide Wi-Fi approach and whether to install for real.
+
+### 2026-11-13 (voice, slice 1) — local command understanding
+- **Decisions (owner):** the Mac mini is the host only; microphones and speakers are on clients and room units; voice must be fast and responsive; hybrid design (local wake word and commands, cloud only for open-ended questions, opt-in). See docs/adr/0005-voice-architecture.md.
+- **Built:** `server/src/voice.rs` (fixed grammar, spoken numbers, ambiguity questions, never unlocks), `POST /api/voice/command` through the shared `run_device_action` path, "Say it" box on the Home page (typed input), unit tests plus an API test.
+- **Caveats:** no local Rust toolchain here (blocked by Application Control), so this was written without a compiler; CI is the first compile. `voice.rs` carries `#[rustfmt::skip]` until a `cargo fmt` pass. No microphone, speech output, recogniser or room unit exists yet.
+- **Next:** audio transport and client pairing; local recogniser and wake word measured under Penryn in CI; speech output with Piper.

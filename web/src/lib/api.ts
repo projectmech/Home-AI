@@ -110,6 +110,13 @@ export interface ActionResult {
   device: Device;
 }
 
+export interface VoiceResult {
+  /** What to say back. */
+  reply: string;
+  outcome: 'confirmed' | 'failed' | 'denied' | 'rejected' | 'answer' | 'clarify' | 'refused' | 'unknown';
+  device?: Device;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -155,6 +162,7 @@ export const api = {
   me: () => request<User>('GET', '/me'),
   act: (id: string, action: Action) =>
     request<ActionResult>('POST', `/devices/${encodeURIComponent(id)}/actions`, action),
+  voice: (text: string) => request<VoiceResult>('POST', '/voice/command', { text }),
   metrics: () => request<{ metrics: Metrics }>('GET', '/server/metrics'),
   hardware: () => request<{ hardware: Hardware }>('GET', '/server/hardware'),
   audit: () => request<{ entries: AuditEntry[] }>('GET', '/audit'),
