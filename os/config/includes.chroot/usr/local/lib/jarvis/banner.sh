@@ -31,6 +31,12 @@ dbg "waited ${i}s healthy=$(healthy && echo yes || echo no) ip=${IP:-none} token
 # Display state, for diagnosing the boot screen (states only, nothing secret).
 dbg "display: fb0=$([ -c /dev/fb0 ] && echo yes || echo no) dri=$(ls /dev/dri 2>/dev/null | tr '\n' ',') splash_arg=$(grep -qw splash /proc/cmdline && echo yes || echo no) plymouthd=$(pgrep -x plymouthd >/dev/null 2>&1 && echo running || echo not-running)"
 dmesg 2>/dev/null | grep -iE 'simpledrm|efifb|fb0|plymouth|framebuffer|drm' | head -n 8 | while IFS= read -r l; do dbg "dmesg: $l"; done
+# Plymouth's own debug log (only exists when started with plymouth.debug).
+if [ -r /var/log/plymouth-debug.log ]; then
+  dbg "plog: lines=$(wc -l < /var/log/plymouth-debug.log)"
+  grep -iE 'error|fail|cannot|unable|parse|syntax|no such|not found|script|renderer|theme|plugin' /var/log/plymouth-debug.log | head -n 14 | while IFS= read -r l; do dbg "plog: $l"; done
+fi
+journalctl -b -u plymouth-start.service --no-pager 2>/dev/null | tail -n 4 | while IFS= read -r l; do dbg "plog: unit: $l"; done
 [ -n "$IP" ] || IP="(no address yet - is the network cable plugged in?)"
 [ -n "$TOKEN" ] || TOKEN="(none - setup is already complete)"
 [ -n "$FP" ] || FP="(unavailable)"

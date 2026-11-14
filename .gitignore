@@ -20,3 +20,5 @@ voice/vendor/
 voice/bench-out/
 llm/vendor/
 llm/bench-out/
+llm/dist/
+ollama-src/

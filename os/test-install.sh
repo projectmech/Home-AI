@@ -53,7 +53,7 @@ fail() {
   echo "FAIL: $*"
   CTX=""
   if [ -n "$log" ] && [ -f "$log" ]; then
-    CTX=$( { clean "$log" | grep -aE 'jarvis|JARVIS|install|Failed|failed|error|Error|unlock|grub|cryptsetup|plymouth|Plymouth|Kernel command line|display:|dmesg:' | tail -n 30; echo '-----'; clean "$log" | tail -n 12; } 2>/dev/null \
+    CTX=$( { { has_file=install-$TAG-A.log; [ -f "$has_file" ] && clean "$has_file" | grep -aE 'initramfs:' | head -n 16; } 2>/dev/null; clean "$log" | grep -aE 'jarvis|JARVIS|install|Failed|failed|error|Error|unlock|grub|cryptsetup|plymouth|Plymouth|Kernel command line|display:|dmesg:|plog:' | tail -n 40; echo '-----'; clean "$log" | tail -n 12; } 2>/dev/null \
       | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
   fi
   printf '::error title=install test %s: %s::%s %%0A%s\n' "$MODE" "$UNLOCK" "$*" "$CTX"

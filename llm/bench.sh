@@ -24,10 +24,18 @@ warn() {
   printf '::warning title=%s::%s\n' "$1" "$(printf '%s' "$2" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
 }
 
-ALLOW_UNPINNED="${ALLOW_UNPINNED:-1}" bash fetch.sh | tee "$OUT/fetch.txt"
-note "ollama download (pin these in llm/fetch.sh)" "$(grep -E 'version=|sha256=|matches' "$OUT/fetch.txt")"
-OL="$PWD/vendor/ollama/bin/ollama"
-LIBDIR="$PWD/vendor/ollama/lib/ollama"
+# OLLAMA_DIR points at a tree with bin/ollama and lib/ollama (for example one
+# made by build-ollama.sh); without it the official release is downloaded.
+if [ -n "${OLLAMA_DIR:-}" ]; then
+  OLLAMA_DIR=$(readlink -f "$OLLAMA_DIR")
+  echo "using the tree at $OLLAMA_DIR" | tee "$OUT/fetch.txt"
+else
+  bash fetch.sh | tee "$OUT/fetch.txt"
+  note "ollama download" "$(grep -E 'version=|sha256=|matches' "$OUT/fetch.txt")"
+  OLLAMA_DIR="$PWD/vendor/ollama"
+fi
+OL="$OLLAMA_DIR/bin/ollama"
+LIBDIR="$OLLAMA_DIR/lib/ollama"
 
 # ---- 1. which CPU backends does it ship, and does the baseline use AVX? -------------
 {

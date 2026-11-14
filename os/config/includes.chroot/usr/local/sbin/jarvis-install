@@ -242,7 +242,7 @@ if [ "$AUTO" = 1 ]; then CONSOLE="console=tty0 console=ttyS0,115200n8"; else CON
 # test asks for the splash, so the serial-console tests keep working.
 SPLASH_ARGS="quiet splash"
 if [ "$AUTO" = 1 ]; then
-  if [ "$(cmdline_value jarvis.install.splash)" = "1" ]; then SPLASH_ARGS="splash"; else SPLASH_ARGS="plymouth.enable=0"; fi
+  if [ "$(cmdline_value jarvis.install.splash)" = "1" ]; then SPLASH_ARGS="splash plymouth.debug"; else SPLASH_ARGS="plymouth.enable=0"; fi
 fi
 cat > "$TARGET/etc/default/grub" <<EOF
 GRUB_DEFAULT=0
@@ -268,6 +268,11 @@ chroot "$TARGET" /bin/bash -c '
 STEP="building the initramfs"
 say "Building the boot files"
 chroot "$TARGET" update-initramfs -u -k all
+
+# What went into the initramfs for the boot screen (names only), reported on the
+# kernel log so a CI run shows whether Plymouth is in it.
+INITRD_FILE=$(ls "$TARGET"/boot/initrd.img-* | head -n 1)
+chroot "$TARGET" lsinitramfs "/boot/$(basename "$INITRD_FILE")" 2>/dev/null   | grep -E 'plymouth|.png$|script.so|label|fonts/|scripts/init-.*/plymouth' | head -n 16   | while IFS= read -r l; do kmsg "JARVIS-INSTALL: initramfs: $l"; done || true
 
 STEP="installing the boot loader"
 say "Installing the boot loader ($BOOTMODE)"

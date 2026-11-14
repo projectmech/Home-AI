@@ -1,7 +1,11 @@
 name: LLM bench
 
 # Can the 2010 Core 2 Duo run Ollama (the local model service)? See
-# llm/bench.sh. Downloads are hash-checked; the first runs learn the hash to pin.
+# llm/bench.sh and llm/build-ollama.sh.
+#
+# Finding (2026-11-14): the official v0.40.16 binary needs x86-64-v3 (Haswell,
+# 2013 or newer) and dies on an emulated Core 2. So `ollama-source` builds
+# Ollama (MIT) ourselves for a baseline x86-64 CPU and runs the same checks.
 on:
   workflow_dispatch:
   push:
@@ -13,15 +17,40 @@ on:
 permissions:
   contents: read
 
+env:
+  OLLAMA_VERSION: v0.40.16
+
 jobs:
-  ollama:
+  # Informational: expected to fail on the emulated Core 2 (see above).
+  ollama-official:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-user zstd jq binutils curl ca-certificates
-      - name: Ollama natively and as an emulated Core 2
+      - name: Official Ollama natively and as an emulated Core 2
         run: bash llm/bench.sh
+
+  ollama-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get the Ollama source
+        run: git clone --depth 1 --branch "$OLLAMA_VERSION" https://github.com/ollama/ollama.git ollama-src
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ollama-src/go.mod
+          cache: false
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user jq binutils curl ca-certificates cmake ninja-build build-essential git
+      - name: Build Ollama for a baseline x86-64 CPU
+        run: bash llm/build-ollama.sh "$PWD/ollama-src" "$PWD/llm/dist"
+      - name: Natively and as an emulated Core 2
+        run: OLLAMA_DIR="$PWD/llm/dist" bash llm/bench.sh
