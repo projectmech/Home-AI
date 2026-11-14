@@ -59,11 +59,18 @@ fail() {
   printf '::error title=install test %s: %s::%s %%0A%s\n' "$MODE" "$UNLOCK" "$*" "$CTX"
   exit 1
 }
+# Is the pattern in the cleaned log? No pipe on purpose: with pipefail, grep -q
+# quitting early makes the writer die of SIGPIPE and the test reports a false miss
+# once the log is big.
+has() { # <pattern> <log>
+  local tmp rc; tmp=$(mktemp); clean "$2" > "$tmp" 2>/dev/null || true
+  grep -aqE "$1" "$tmp"; rc=$?; rm -f "$tmp"; return $rc
+}
 waitfor() { # <log> <pattern> <seconds> <description>
   local t=0
   while [ "$t" -lt "$3" ]; do
-    clean "$1" 2>/dev/null | grep -aqE "$2" && return 0
-    if [ -n "$QPID" ] && ! kill -0 "$QPID" 2>/dev/null; then clean "$1" 2>/dev/null | grep -aqE "$2" && return 0; fail "the VM exited while waiting for: $4"; fi
+    has "$2" "$1" && return 0
+    if [ -n "$QPID" ] && ! kill -0 "$QPID" 2>/dev/null; then has "$2" "$1" && return 0; fail "the VM exited while waiting for: $4"; fi
     sleep 3; t=$((t + 3))
   done
   fail "timed out after $3 s waiting for: $4"
@@ -81,8 +88,8 @@ qemu-system-x86_64 "${COMMON[@]}" "${EFI[@]}" -serial "file:$CURLOG" \
   -netdev user,id=n0 -device e1000,netdev=n0 &
 QPID=$!
 waitfor "$CURLOG" 'JARVIS-INSTALL: (DONE|FAIL)' 1200 "the installer to finish"
-clean "$CURLOG" | grep -aq 'JARVIS-INSTALL: DONE' || fail "the installer reported a failure"
-clean "$CURLOG" | grep -aq "Boot mode of this computer: $MODE" || fail "the installer did not run in $MODE mode"
+has 'JARVIS-INSTALL: DONE' "$CURLOG" || fail "the installer reported a failure"
+has "Boot mode of this computer: $MODE" "$CURLOG" || fail "the installer did not run in $MODE mode"
 RECOVERY=$(clean "$CURLOG" | sed -n 's/.*JARVIS-INSTALL: RECOVERY-KEY \([A-Z2-9-]*\).*/\1/p' | tail -n 1)
 [ "${#RECOVERY}" -eq 39 ] || fail "no recovery key was printed"
 for _ in $(seq 1 40); do kill -0 "$QPID" 2>/dev/null || break; sleep 3; done
@@ -141,10 +148,10 @@ unlock_with_splash() { # <tag> <secret>
     # Diagnosis: if the unlock prompt came up on the serial console the splash did
     # not take over. Unlock that way so the system finishes booting and reports
     # its display state (the "display:" and "dmesg:" lines), then fail.
-    if clean "$CURLOG" | grep -aq 'Please unlock disk'; then
+    if has 'Please unlock disk' "$CURLOG"; then
       { sleep 1; printf '%s\n' "$secret"; sleep 3; } | timeout 20 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true
       for _ in $(seq 1 60); do
-        clean "$CURLOG" | grep -aqE 'dmesg: |Dashboard: +https://' && break
+        has 'dmesg: |Dashboard: +https://' "$CURLOG" && break
         sleep 3
       done
       sleep 5
@@ -158,7 +165,7 @@ unlock_with_splash() { # <tag> <secret>
     sleep 6
     type_keys "$secret"
     for _ in $(seq 1 30); do
-      clean "$CURLOG" | grep -aqE 'Dashboard: +https://[0-9.]+:8443' && return 0
+      has 'Dashboard: +https://[0-9.]+:8443' "$CURLOG" && return 0
       sleep 3
     done
   done
