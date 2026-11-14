@@ -58,7 +58,30 @@ SSE42=$(grep -cE '\b(popcnt|crc32|pcmpestri|pcmpistri|pcmpgtq)\b' "$OUT/server.a
 note "llama-server instruction scan" "ymm/zmm lines: $YMM; VEX instructions: $VEX; SSE4.2/POPCNT lines: $SSE42 (all three must be 0 for a Core 2)"
 awk '/^[0-9a-f]+ <.*>:$/ {fn=$2} /%(ymm|zmm)[0-9]+/ {c[fn]++} END {for (f in c) print c[f], f}' "$OUT/server.asm" | sort -rn | head -n 10 > "$OUT/ymm-functions.txt" || true
 note "functions with AVX registers (empty means none)" "$(cat "$OUT/ymm-functions.txt")"
+# Other instructions a Core 2 (Penryn: SSE4.1) lacks: BMI/ABM, AES, PCLMUL, MOVBE, RDRAND ...
+SUSPECT='lzcnt|tzcnt|movbe|andn|bextr|blsr|blsi|blsmsk|shlx|shrx|sarx|rorx|mulx|pdep|pext|adcx|adox|rdrand|rdseed|aesenc|aesdec|aeskeygenassist|pclmulqdq|rdtscp|xgetbv|xsave|xrstor|vzeroupper|sha1rnds4|sha256rnds2|prefetchw|cmpxchg16b'
+awk -v re="^($SUSPECT)\$" '/^[0-9a-f]+ <.*>:$/ {fn=$2; next} {n = split($0, a, "\t"); if (n >= 2) {split(a[2], m, " "); if (m[1] ~ re) c[m[1] " in " fn]++}} END {for (k in c) print c[k], k}' "$OUT/server.asm" | sort -rn | head -n 15 > "$OUT/suspects.txt" || true
+note "other instructions a Core 2 lacks, in the server binary (empty means none)" "$(cat "$OUT/suspects.txt")"
 rm -f "$OUT/server.asm"
+
+# ---- which emulated CPU does it run on, and where does it stop on a Core 2? ----------------
+sweep() {
+  local cpu r
+  for cpu in Penryn Nehalem SandyBridge Haswell; do
+    if timeout 120 qemu-x86_64 -cpu "$cpu" "$BIN" --version > "$OUT/v-$cpu.txt" 2>&1; then
+      r="runs: $(head -n 1 "$OUT/v-$cpu.txt" | cut -c1-80)"
+    else
+      r="FAILED: $(tail -n 1 "$OUT/v-$cpu.txt" | cut -c1-100)"
+    fi
+    echo "$cpu: $r"
+  done
+}
+if command -v qemu-x86_64 > /dev/null; then
+  note "llama-server --version on emulated CPUs (Penryn=Core 2; Nehalem adds SSE4.2; SandyBridge adds AVX)" "$(sweep)"
+  timeout 300 qemu-x86_64 -cpu Penryn -d in_asm,nochain -D "$OUT/asm.log" "$BIN" --version > /dev/null 2>&1 || true
+  note "last translated blocks before the Penryn stop" "$(tail -n 40 "$OUT/asm.log" 2> /dev/null | cut -c1-130)"
+  rm -f "$OUT/asm.log"
+fi
 
 # ---- a tiny test model --------------------------------------------------------------------------
 MODEL=vendor/stories260K.gguf
