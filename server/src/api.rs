@@ -20,6 +20,7 @@ use crate::events::Event;
 use crate::policy::{self, Action, Decision, Role};
 use crate::settings::{self, HomeSettings, SecuritySettings};
 use crate::voice::{self, Intent};
+use crate::voice_clients;
 use crate::{hwdiag, now, ws, AppState};
 
 const CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
@@ -46,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/server/hardware", get(server_hardware))
         .route("/audit", get(audit_log))
         .route("/ws", get(ws::ws_handler))
+        .merge(voice_clients::routes())
         .fallback(|| async { ApiError::NotFound })
         .layer(middleware::from_fn(api_guard));
 
@@ -527,19 +529,29 @@ async fn voice_command(
     user: AuthUser,
     Json(req): Json<VoiceReq>,
 ) -> Result<Json<Value>, ApiError> {
-    if req.text.chars().count() > 300 {
+    run_voice_text(&s, &user, &req.text).await.map(Json)
+}
+
+/// The one path every spoken or typed command takes, whether it came from the
+/// dashboard or from a paired voice client.
+pub(crate) async fn run_voice_text(
+    s: &AppState,
+    user: &AuthUser,
+    text: &str,
+) -> Result<Value, ApiError> {
+    if text.chars().count() > 300 {
         let msg = "That is too long for a voice command.";
         return Err(ApiError::BadRequest(msg.into()));
     }
     let known = s.db.call(|c| devices::list(c)).await?;
-    let reply = match voice::parse(&req.text, &known) {
+    let reply = match voice::parse(text, &known) {
         Intent::Say { reply, kind } => json!({ "reply": reply, "outcome": kind }),
         Intent::Act {
             device_id,
             device_name,
             action,
             done,
-        } => match run_device_action(&s, &user, device_id, action, None).await {
+        } => match run_device_action(s, user, device_id, action, None).await {
             Ok(v) if v["outcome"].as_str() == Some("confirmed") => {
                 json!({ "reply": done, "outcome": "confirmed", "device": v["device"] })
             }
@@ -556,7 +568,7 @@ async fn voice_command(
     let outcome = reply["outcome"].as_str().unwrap_or("none").to_string();
     let who = Some(user.username.as_str());
     s.audit(who, "voice_command", None, &outcome, None).await;
-    Ok(Json(reply))
+    Ok(reply)
 }
 
 async fn verify_current_password(

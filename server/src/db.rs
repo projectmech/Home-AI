@@ -53,6 +53,22 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     );
     ",
+    "
+    CREATE TABLE voice_clients (
+        id           TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        room         TEXT NOT NULL,
+        pair_hash    TEXT,
+        pair_expires INTEGER,
+        token_hash   TEXT UNIQUE,
+        created_by   TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        paired_at    INTEGER,
+        last_seen    INTEGER,
+        revoked      INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX voice_clients_pair ON voice_clients(pair_hash);
+    ",
 ];
 
 #[derive(Clone)]

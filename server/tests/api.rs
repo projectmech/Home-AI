@@ -6,13 +6,15 @@ use std::path::PathBuf;
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use home_ai::db::Db;
 use home_ai::policy::Role;
 use home_ai::{api, AppState};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tower::ServiceExt;
 
 const ADMIN_PW: &str = "correct horse battery staple";
@@ -866,4 +868,166 @@ async fn voice_commands_use_the_same_policy_path() {
     let long = "turn on the light ".repeat(40);
     let r = voice(&app, &admin, &long).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
+}
+
+type VoiceSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+const CLIENTS_URI: &str = "/api/voice/clients";
+const PAIR_URI: &str = "/api/voice/pair";
+
+async fn post_json(app: &Router, uri: &str, cookie: Option<&str>, body: Value) -> Reply {
+    call(app, Method::POST, uri, cookie, Some(body)).await
+}
+
+async fn voice_connect(url: &str, token: Option<&str>) -> Option<VoiceSocket> {
+    let mut req = url.into_client_request().unwrap();
+    if let Some(t) = token {
+        req.headers_mut()
+            .insert("authorization", format!("Bearer {t}").parse().unwrap());
+    }
+    tokio_tungstenite::connect_async(req)
+        .await
+        .ok()
+        .map(|(ws, _)| ws)
+}
+
+async fn send_json(ws: &mut VoiceSocket, v: Value) {
+    let msg = tokio_tungstenite::tungstenite::Message::Text(v.to_string().into());
+    ws.send(msg).await.unwrap();
+}
+
+async fn send_audio(ws: &mut VoiceSocket, bytes: usize) {
+    let msg = tokio_tungstenite::tungstenite::Message::Binary(vec![0u8; bytes].into());
+    ws.send(msg).await.unwrap();
+}
+
+async fn next_json(ws: &mut VoiceSocket) -> Value {
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+        .await
+        .expect("message within 5s")
+        .unwrap()
+        .unwrap();
+    serde_json::from_str(msg.to_text().unwrap()).unwrap()
+}
+
+/// Pairing is one-time and rate-limited; a paired client streams commands and
+/// audio over its own token, and an administrator can revoke it.
+#[tokio::test]
+async fn voice_clients_pair_once_and_stream_commands() {
+    let state = new_state().await;
+    let app = api::router(state.clone());
+    setup_admin(&state, &app).await;
+    api::create_user(&state, "standard", ADMIN_PW, Role::Standard)
+        .await
+        .unwrap();
+    let admin = login(&app, "admin", ADMIN_PW).await;
+    let standard = login(&app, "standard", ADMIN_PW).await;
+
+    // Only an administrator can add or list clients.
+    let body = json!({ "name": "Kitchen unit", "room": "Kitchen" });
+    let r = post_json(&app, CLIENTS_URI, None, body.clone()).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = post_json(&app, CLIENTS_URI, Some(&standard), body.clone()).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = call(&app, Method::GET, CLIENTS_URI, Some(&standard), None).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let blank = json!({ "name": "", "room": "x" });
+    let r = post_json(&app, CLIENTS_URI, Some(&admin), blank).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let r = post_json(&app, CLIENTS_URI, Some(&admin), body).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let id = r.body["id"].as_str().unwrap().to_string();
+    let code = r.body["pairing_code"].as_str().unwrap().to_string();
+    assert_eq!(code.len(), 11);
+    assert_eq!(code.as_bytes()[5], b'-');
+
+    // The list never contains the code or any token.
+    let r = call(&app, Method::GET, CLIENTS_URI, Some(&admin), None).await;
+    let first = &r.body["clients"][0];
+    assert_eq!(first["id"], id.as_str());
+    assert_eq!(first["paired"], false);
+    assert_eq!(first["pairing_open"], true);
+    assert!(!r.body.to_string().contains(&code));
+
+    // A wrong code is refused; the right one works exactly once.
+    let wrong = json!({ "code": "AAAAA-AAAAA" });
+    let r = post_json(&app, PAIR_URI, None, wrong).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let lower = json!({ "code": code.to_lowercase() });
+    let r = post_json(&app, PAIR_URI, None, lower).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["client_id"], id.as_str());
+    let token = r.body["token"].as_str().unwrap().to_string();
+    assert_eq!(token.len(), 64);
+    let again = json!({ "code": code });
+    let r = post_json(&app, PAIR_URI, None, again).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+
+    let r = call(&app, Method::GET, CLIENTS_URI, Some(&admin), None).await;
+    assert_eq!(r.body["clients"][0]["paired"], true);
+    assert_eq!(r.body["clients"][0]["pairing_open"], false);
+    assert!(!r.body.to_string().contains(&token));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let served = app.clone();
+    tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
+    let url = format!("ws://{addr}/api/voice/stream");
+
+    // No token, a malformed token and an unknown token are all refused.
+    assert!(voice_connect(&url, None).await.is_none());
+    assert!(voice_connect(&url, Some("nope")).await.is_none());
+    assert!(voice_connect(&url, Some(&"0".repeat(64))).await.is_none());
+
+    let mut ws = voice_connect(&url, Some(&token)).await.expect("connects");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["type"], "ready");
+    assert_eq!(ready["room"], "Kitchen");
+    assert_eq!(ready["audio"]["rate_hz"], 16000);
+
+    // A command from the client goes through the shared policy path.
+    let cmd = json!({ "type": "command", "text": "turn off the kitchen light" });
+    send_json(&mut ws, cmd).await;
+    let reply = next_json(&mut ws).await;
+    assert_eq!(reply["type"], "reply");
+    assert_eq!(reply["outcome"], "confirmed");
+    assert_eq!(reply["device"]["state"]["on"], false);
+
+    // Voice never unlocks, even from a paired client.
+    let cmd = json!({ "type": "command", "text": "unlock the front door" });
+    send_json(&mut ws, cmd).await;
+    assert_eq!(next_json(&mut ws).await["outcome"], "refused");
+
+    // Audio is measured but not understood yet (no recogniser installed).
+    send_audio(&mut ws, 3200).await;
+    send_json(&mut ws, json!({ "type": "end" })).await;
+    let reply = next_json(&mut ws).await;
+    assert_eq!(reply["outcome"], "unavailable");
+    assert_eq!(reply["audio_ms"], 100);
+
+    // An empty utterance, an over-long one and garbage are reported as errors.
+    send_json(&mut ws, json!({ "type": "end" })).await;
+    assert_eq!(next_json(&mut ws).await["type"], "error");
+    for _ in 0..16 {
+        send_audio(&mut ws, 32_000).await;
+    }
+    send_json(&mut ws, json!({ "type": "end" })).await;
+    let reply = next_json(&mut ws).await;
+    assert_eq!(reply["type"], "error");
+    assert!(reply["message"].as_str().unwrap().contains("longer"));
+    let junk = tokio_tungstenite::tungstenite::Message::Text("not json".into());
+    ws.send(junk).await.unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "error");
+
+    // Revoking stops new connections with that token.
+    let uri = format!("/api/voice/clients/{id}");
+    let r = call(&app, Method::DELETE, &uri, Some(&admin), None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(voice_connect(&url, Some(&token)).await.is_none());
+    let missing = "/api/voice/clients/vc-missing";
+    let r = call(&app, Method::DELETE, missing, Some(&admin), None).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = call(&app, Method::GET, CLIENTS_URI, Some(&admin), None).await;
+    assert_eq!(r.body["clients"][0]["revoked"], true);
 }

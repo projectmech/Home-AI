@@ -15,6 +15,8 @@ pub mod tls;
 // `cargo fmt --check` skips it. Remove this attribute after a `cargo fmt` pass.
 #[rustfmt::skip]
 pub mod voice;
+#[rustfmt::skip]
+pub mod voice_clients;
 pub mod ws;
 
 use std::collections::HashMap;
