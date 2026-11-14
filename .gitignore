@@ -16,3 +16,5 @@ dist/
 *.log
 .DS_Store
 data/
+voice/vendor/
+voice/bench-out/
