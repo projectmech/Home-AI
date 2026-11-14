@@ -2,6 +2,12 @@ name: llama.cpp bench
 
 # Can llama.cpp built for a Core 2 (no AVX) run a model? See llm/llamacpp-bench.sh
 # and docs/AI.md. Independent of llm-bench.yml (which tests Ollama's own binary).
+#
+# It runs inside debian:trixie, the OS image's base. The ubuntu-latest runner's
+# own C library refuses to run on an emulated Core 2 (a first run showed every
+# program stopping at the same place, including Vosk and whisper.cpp), so
+# anything tested directly on the runner under qemu says nothing about a real
+# Core 2.
 on:
   workflow_dispatch:
   push:
@@ -19,9 +25,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install tools
+      - name: Build llama-server for a Core 2 and run it, natively and emulated (in Debian trixie)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cmake git curl jq bc binutils qemu-user
-      - name: Build llama-server for a Core 2 and run it, natively and emulated
-        run: bash llm/llamacpp-bench.sh
+          docker run --rm -v "$PWD:/w" -w /w debian:trixie bash -c '
+            apt-get update -qq &&
+            apt-get install -y -qq --no-install-recommends build-essential cmake git curl jq bc binutils qemu-user ca-certificates > /dev/null &&
+            bash llm/llamacpp-bench.sh'

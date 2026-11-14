@@ -20,6 +20,19 @@ warn() {
   printf '::warning title=%s::%s\n' "$1" "$(printf '%s' "$2" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
 }
 
+# ---- control: does an ordinary program run on an emulated Core 2 HERE? -----------------
+# Runs inside debian:trixie (the OS image's base). A system C library built for a
+# newer CPU makes EVERY program stop on an emulated Core 2, which would make this
+# whole test meaningless; this control tells the two cases apart.
+if command -v qemu-x86_64 > /dev/null; then
+  if qemu-x86_64 -cpu Penryn /bin/true 2> "$OUT/control.err"; then
+    control="/bin/true RUNS on an emulated Core 2 here"
+  else
+    control="/bin/true FAILS on an emulated Core 2 here: $(tail -n 1 "$OUT/control.err")"
+  fi
+  note "control: an ordinary program on an emulated Core 2" "$control. $(ldd --version 2> /dev/null | head -n 1)"
+fi
+
 # ---- source: a release tag, printed so it can be pinned ---------------------------
 TAG="${LLAMACPP_TAG:-}"
 if [ -z "$TAG" ]; then

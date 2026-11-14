@@ -1,12 +1,12 @@
-name: Voice bench (rejected engines)
+name: Voice bench (Vosk and whisper.cpp recheck)
 
-# Evidence for docs/adr/0005-voice-architecture.md. Both are EXPECTED TO FAIL
-# on an emulated Core 2 and are therefore run by hand only:
-#  - Vosk 0.3.45 prebuilt: fast, but its start-up code executes an AVX
-#    instruction (vpxor) and dies with an illegal instruction.
-#  - whisper.cpp v1.7.4 tiny.en: contains AVX despite every AVX option off, and
-#    is about 1.8 s per 1.9 s of speech on one modern core (a Core 2 would be
-#    4 to 6 times slower).
+# By hand only. Earlier runs of these two on the ubuntu-latest runner stopped with
+# an illegal instruction under an emulated Core 2, and I concluded they needed AVX.
+# A later run showed the stop is at the SAME bytes in every program, including a
+# source-built llama.cpp with no AVX at all: the runner's own C library requires a
+# newer CPU than a Core 2 ("CPU does not support x86-64-v3" on an emulated
+# SandyBridge). So those results said nothing about the programs. This reruns them
+# inside debian:trixie (the OS image's base), whose C library runs on a Core 2.
 on:
   workflow_dispatch:
 
@@ -19,17 +19,22 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user unzip binutils build-essential curl
-      - run: bash voice/bench.sh
+      - name: Vosk in Debian trixie
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w debian:trixie bash -c '
+            apt-get update -qq &&
+            apt-get install -y -qq --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user unzip binutils build-essential curl ca-certificates > /dev/null &&
+            qemu-x86_64 -cpu Penryn /bin/true && echo "::notice title=control::an ordinary Debian program runs on an emulated Core 2" ;
+            bash voice/bench.sh'
 
   whisper:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user binutils build-essential cmake git curl bc
-      - run: bash voice/bench-whisper.sh
+      - name: whisper.cpp in Debian trixie
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w debian:trixie bash -c '
+            apt-get update -qq &&
+            apt-get install -y -qq --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user binutils build-essential cmake git curl bc ca-certificates > /dev/null &&
+            bash voice/bench-whisper.sh'
