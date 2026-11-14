@@ -7,7 +7,7 @@
 //! token is stored. An administrator can revoke a client at any time; a revoked
 //! client's open connection is closed within one heartbeat.
 
-use std::path::{Path, PathBuf};
+use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -358,7 +358,7 @@ async fn recognise(s: &AppState, pcm: &[u8]) -> Heard {
     }
 }
 
-fn run_recogniser(bin: &Path, grammar: &str, wav: &[u8]) -> Option<String> {
+fn run_recogniser(bin: &FsPath, grammar: &str, wav: &[u8]) -> Option<String> {
     let dir = std::env::temp_dir().join(format!("home-ai-stt-{}", &auth::new_token()[..16]));
     std::fs::create_dir(&dir).ok()?;
     let heard = recognise_in(&dir, bin, grammar, wav);
@@ -366,7 +366,7 @@ fn run_recogniser(bin: &Path, grammar: &str, wav: &[u8]) -> Option<String> {
     heard
 }
 
-fn recognise_in(dir: &Path, bin: &Path, grammar: &str, wav: &[u8]) -> Option<String> {
+fn recognise_in(dir: &FsPath, bin: &FsPath, grammar: &str, wav: &[u8]) -> Option<String> {
     let gram_file = dir.join("home.gram");
     let wav_file = dir.join("said.wav");
     std::fs::write(&gram_file, grammar).ok()?;
@@ -595,13 +595,13 @@ mod tests {
     fn a_program_is_run_with_the_grammar_and_the_audio() {
         let work = tempfile::tempdir().unwrap();
         let wav = wav_bytes(&[0u8; 64]);
-        let heard = recognise_in(work.path(), Path::new("/bin/echo"), "grammar", &wav);
+        let heard = recognise_in(work.path(), FsPath::new("/bin/echo"), "grammar", &wav);
         let heard = heard.expect("echo ran");
         assert!(heard.starts_with("-jsgf "), "{heard}");
         assert!(heard.contains("-infile "), "{heard}");
         assert!(work.path().join("home.gram").is_file());
         assert!(work.path().join("said.wav").is_file());
-        let missing = Path::new("/nonexistent/recogniser");
+        let missing = FsPath::new("/nonexistent/recogniser");
         assert!(recognise_in(work.path(), missing, "g", &wav).is_none());
     }
 
