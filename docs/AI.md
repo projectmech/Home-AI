@@ -8,7 +8,7 @@ the model is never trusted with anything.
 - The host talks to the model server through the OpenAI-style
   `/v1/chat/completions` API, so **Ollama** and **llama.cpp's `llama-server`**
   both work and either can be swapped in.
-- Default model: `llama2-uncensored:latest` (Ollama library, about 3.8 GB).
+- Default model: `llama3.2:1b` (about 1.3 GB, the fastest sensible choice for this hardware). `llama2-uncensored:latest` (about 3.8 GB) is a one-setting alternative, roughly three to five times slower.
   Change it in the settings (below). Community "uncensored" models have their own
   licences: read the model card before relying on one.
 - The model server must listen on this computer (`127.0.0.1` or `localhost`).
@@ -48,3 +48,22 @@ yet.
   that is solved (for example by building llama.cpp from source for the Core 2),
   the model server may have to run on another computer; the host will not talk to
   it unless a loopback tunnel is set up on purpose.
+
+## Decision (owner: "choose what is best")
+1. **What answers fast is the grammar, not the model.** Everyday commands never
+   touch the model; they are instant. The model is only for open questions.
+2. **Default model: a small one (`llama3.2:1b`).** On a Core 2 Duo with no AVX the
+   speed of a model is set by its size: roughly 1B is usable (a few words a
+   second at best), 3B is slow, 7B (`llama2-uncensored`) is a minute or more per
+   answer. A 7B model stays available as a setting for people who accept the wait.
+   These speeds are estimates: only `llm/bench-models.sh` run on the Mac mini
+   gives real numbers.
+3. **Model server: llama.cpp's `llama-server`, built for the Core 2, is the target;
+   Ollama stays supported.** Ollama's own server crashed on an emulated Core 2
+   (see above); both speak the same API, so the host does not care which runs. The
+   server will be packaged in the OS image once a build is shown to run on the
+   emulated Core 2 in CI.
+4. **Hard questions: cloud AI, as an opt-in.** Not built; the settings and the
+   loopback rule above would need a deliberate change.
+5. **Safety does not depend on the model.** An "uncensored" or any other model can
+   say what it likes; what it can DO is decided by the grammar and the policy.
