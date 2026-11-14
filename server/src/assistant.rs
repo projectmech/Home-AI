@@ -358,7 +358,10 @@ pub(crate) async fn ask(s: &AppState, user: &AuthUser, text: &str, devices: &[De
     if let Some(command) = &model.command {
         // The proposed command is just words: it goes through the same grammar,
         // validation, permissions and audit as anything a person says. No AI again.
-        if let Ok(done) = api::run_voice_text_with(s, user, command, false).await {
+        // Boxed: this and run_voice_text_with call each other (never twice in a
+        // row, because allow_ai is false here), and async recursion needs a box.
+        let proposed = Box::pin(api::run_voice_text_with(s, user, command, false));
+        if let Ok(done) = proposed.await {
             let outcome = done["outcome"].as_str().unwrap_or("none");
             if matches!(
                 outcome,
