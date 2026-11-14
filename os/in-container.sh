@@ -35,6 +35,34 @@ lb config \
   --bootappend-live "$APPEND"
 
 cp -a /stage/config/. config/
+
+# ---- the local AI model server: llama.cpp's llama-server, built for a Core 2 --------------
+# Pinned to one commit. -march=core2 with every AVX option off: the 2010 Mac mini's
+# CPU has neither AVX nor SSE4.2. Built here, in debian:trixie (baseline x86-64 C
+# library, the same as the image), and copied in. The language MODEL is not in the
+# image: `jarvis-model install` downloads it with a pinned hash (docs/AI.md).
+LLAMA_COMMIT=b1b770d90d94cad9e9ea5b993bdbc383a522fb28
+apt-get install -y --no-install-recommends build-essential cmake git
+mkdir -p /build/llama
+cd /build/llama
+git init -q .
+git remote add origin https://github.com/ggml-org/llama.cpp.git
+git fetch -q --depth 1 origin "$LLAMA_COMMIT"
+git checkout -q FETCH_HEAD
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DLLAMA_CURL=OFF \
+  -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
+  -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF \
+  -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF -DGGML_SSE42=OFF \
+  -DCMAKE_C_FLAGS="-march=core2 -mtune=core2 -O2" -DCMAKE_CXX_FLAGS="-march=core2 -mtune=core2 -O2"
+cmake --build build -j"$(nproc)" --target llama-server
+install -D -m 0755 build/bin/llama-server /build/lb/config/includes.chroot/usr/local/bin/llama-server
+# The build fails if the binary contains an AVX or SSE4.2 instruction a Core 2 lacks.
+objdump -d --no-show-raw-insn build/bin/llama-server > /tmp/llama.asm
+BAD=$(grep -cE '%(ymm|zmm)[0-9]+|^[[:space:]]*[0-9a-f]+:[[:space:]]+v[a-z0-9]+[[:space:]]|[[:space:]](popcnt|crc32|pcmpestri|pcmpistri|pcmpgtq)[[:space:]]' /tmp/llama.asm || true)
+rm -f /tmp/llama.asm
+[ "$BAD" = 0 ] || { echo "ERROR: llama-server contains $BAD instructions a Core 2 lacks" >&2; exit 1; }
+cd /build/lb
+
 lb build
 
 ISO=$(ls /build/lb/*.iso | head -n 1)

@@ -1096,7 +1096,7 @@ async fn assistant_answers_and_proposes_but_the_policy_decides() {
     let r = put_assistant(&app, &admin, "http://example.com:11434").await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     let r = call(&app, Method::GET, ASSISTANT_URI, Some(&admin), None).await;
-    assert_eq!(r.body["assistant"]["model"], "llama3.2:1b");
+    assert_eq!(r.body["assistant"]["model"], "qwen2.5:1.5b");
 
     // The model proposes a command: it runs through the normal path.
     let reply = r#"{"reply": "Of course.", "command": "turn off the kitchen light"}"#;

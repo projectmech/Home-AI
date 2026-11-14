@@ -1,0 +1,42 @@
+[Unit]
+Description=JARVIS local AI model server (llama.cpp, this computer only)
+Documentation=file:///usr/share/doc/jarvis/AI.md
+# Starts only after `jarvis-model install` has put a model in place.
+ConditionPathExists=/var/lib/jarvis-model/model.gguf
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/local/bin/llama-server -m /var/lib/jarvis-model/model.gguf --host 127.0.0.1 --port 11434 -t 2 -c 2048 --no-warmup
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+# The model server never needs the network: it may talk to this computer only.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Least privilege.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+
+# Keep it from starving the home server on a 16 GB, two-core machine.
+MemoryMax=8G
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -42,7 +42,7 @@ pub struct AssistantSettings {
     pub enabled: bool,
     /// Where the model server listens, for example http://127.0.0.1:11434.
     pub url: String,
-    /// Model name as the server knows it, for example llama3.2:1b or llama2-uncensored:latest.
+    /// Model name as the server knows it, for example qwen2.5:1.5b or llama2-uncensored:latest.
     pub model: String,
     /// How long to wait for an answer.
     pub timeout_s: u64,
@@ -56,7 +56,7 @@ impl Default for AssistantSettings {
         Self {
             enabled: true,
             url: "http://127.0.0.1:11434".into(),
-            model: "llama3.2:1b".into(),
+            model: "qwen2.5:1.5b".into(),
             timeout_s: 60,
             max_tokens: 120,
             persona: "Calm, dry-witted and brief, like a capable butler. Never pompous.".into(),

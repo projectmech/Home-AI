@@ -9,7 +9,7 @@ useradd --system --user-group --home-dir /var/lib/home-ai --no-create-home \
 install -d -m 0750 -o root -g home-ai /etc/home-ai
 chown root:home-ai /etc/home-ai/home-ai.env
 chmod 0640 /etc/home-ai/home-ai.env
-chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /usr/local/lib/jarvis/banner.sh /opt/home-ai/bin/home-ai /usr/local/sbin/jarvis-install
+chmod 0755 /usr/local/bin/home-ai /usr/local/lib/jarvis/selftest.sh /usr/local/lib/jarvis/banner.sh /opt/home-ai/bin/home-ai /usr/local/sbin/jarvis-install /usr/local/sbin/jarvis-model /usr/local/bin/llama-server
 chown -R root:root /opt/home-ai
 mkdir -p /etc/issue.d
 
@@ -17,6 +17,8 @@ mkdir -p /etc/issue.d
 find /lib/live/config -name '*user-setup*' -exec rm -f {} + || true
 
 systemctl enable home-ai.service
+# The local AI model server starts only if a model has been installed (jarvis-model).
+systemctl enable jarvis-llm.service
 systemctl enable jarvis-banner.service
 systemctl enable jarvis-selftest.service
 # Both are inert unless the matching boot menu entry added its kernel parameter.

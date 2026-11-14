@@ -1,0 +1,60 @@
+#!/bin/bash
+# Manage the local AI model: jarvis-model status | install
+#
+#   sudo jarvis-model install   download the model, check it against a pinned
+#                               SHA-256, put it in place and start the model server
+#   jarvis-model status         show what is installed and whether the server runs
+#
+# The model is NOT part of the image (about 1 GB). It is downloaded once, from a
+# fixed address, and only a file whose SHA-256 matches the pin below is kept. The
+# model server itself (jarvis-llm.service) can talk to this computer only.
+set -euo pipefail
+
+DIR=/var/lib/jarvis-model
+MODEL="$DIR/model.gguf"
+# Qwen2.5 1.5B Instruct, Q4_K_M, official Qwen GGUF release (Apache-2.0).
+MODEL_NAME="Qwen2.5-1.5B-Instruct (Q4_K_M)"
+MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+MODEL_SHA256=""   # pinned from a CI run; empty means this build cannot install a model yet
+MODEL_MAX_BYTES=2500000000
+
+status() {
+  if [ -f "$MODEL" ]; then
+    echo "model: $MODEL_NAME installed, $(stat -c %s "$MODEL") bytes, sha256 $(sha256sum "$MODEL" | cut -d' ' -f1)"
+  else
+    echo "model: none installed (run: sudo jarvis-model install)"
+  fi
+  echo "server: $(systemctl is-active jarvis-llm.service 2> /dev/null || true)"
+}
+
+install_model() {
+  [ "$(id -u)" = 0 ] || { echo "run as root: sudo jarvis-model install" >&2; exit 1; }
+  if [ -z "$MODEL_SHA256" ]; then
+    echo "This build has no pinned hash for the model, so it will not download one." >&2
+    exit 1
+  fi
+  install -d -m 0755 "$DIR"
+  local tmp
+  tmp=$(mktemp -p "$DIR" .download.XXXXXX)
+  trap 'rm -f "$tmp"' EXIT
+  echo "Downloading $MODEL_NAME (about 1 GB). This needs the internet."
+  curl -fL --retry 3 --max-filesize "$MODEL_MAX_BYTES" -o "$tmp" "$MODEL_URL"
+  local got
+  got=$(sha256sum "$tmp" | cut -d' ' -f1)
+  if [ "$got" != "$MODEL_SHA256" ]; then
+    echo "The download does not match the pinned hash (got $got). Not installing it." >&2
+    exit 1
+  fi
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$MODEL"
+  trap - EXIT
+  systemctl restart jarvis-llm.service
+  echo "Installed. The model server is starting; it listens on 127.0.0.1:11434 only."
+  status
+}
+
+case "${1:-status}" in
+  status) status ;;
+  install) install_model ;;
+  *) echo "usage: jarvis-model status | install" >&2; exit 2 ;;
+esac

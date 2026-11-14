@@ -142,6 +142,34 @@ if command -v qemu-x86_64 > /dev/null; then
 else
   warn "emulated Core 2" "qemu-x86_64 is not installed"
 fi
+# ---- the assistant's real model: hash to pin, a rough speed, and does it answer in JSON? -------
+# (Reported as warnings only because GitHub caps notices at ten per step.)
+QWEN_URL=https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
+QWEN=vendor/qwen2.5-1.5b-instruct-q4_k_m.gguf
+if [ ! -f "$QWEN" ]; then curl -fsSL --retry 3 -o "$QWEN" "$QWEN_URL" || warn "(info) assistant model download failed" "$QWEN_URL"; fi
+if [ -f "$QWEN" ]; then
+  QSHA=$(sha256sum "$QWEN" | cut -d' ' -f1)
+  QSIZE=$(stat -c %s "$QWEN")
+  "$BIN" -m "$QWEN" --host 127.0.0.1 --port 18093 -t 2 -c 1024 --no-warmup > "$OUT/serve-qwen.log" 2>&1 &
+  QPID=$!
+  t=0
+  until curl -fsS --max-time 3 http://127.0.0.1:18093/health > /dev/null 2>&1; do
+    kill -0 "$QPID" 2> /dev/null || break
+    t=$((t + 3))
+    [ "$t" -lt 240 ] || break
+    sleep 3
+  done
+  BODY='{"messages":[{"role":"system","content":"You are a home assistant. Reply with ONE JSON object and nothing else: {\"reply\": \"what you say\", \"command\": \"a home command, or null\"}. A command is exactly one of: turn on the <room> light; turn off the <room> light; volume up; lock the front door. Use null when no action is needed. You cannot unlock anything."},{"role":"user","content":"it is cold and dark in the kitchen, switch the light on please"}],"max_tokens":80,"temperature":0.3}'
+  if curl -fsS --max-time 300 http://127.0.0.1:18093/v1/chat/completions -d "$BODY" > "$OUT/qwen-reply.json" 2> "$OUT/qwen.err"; then
+    TEXT=$(jq -r '.choices[0].message.content' "$OUT/qwen-reply.json" | tr '\n' ' ' | cut -c1-300)
+    SPEED=$(jq -r '"read \(.timings.prompt_per_second // 0 | floor) t/s, write \(.timings.predicted_per_second // 0 | floor) t/s"' "$OUT/qwen-reply.json" 2> /dev/null || echo "no timings")
+    warn "(info) assistant model Qwen2.5-1.5B Q4_K_M" "sha256 $QSHA size $QSIZE bytes. Native on this runner's modern CPU, 2 threads: $SPEED (a Core 2 will be several times slower). Reply: $TEXT"
+  else
+    warn "(info) assistant model: generation failed" "$(tail -n 6 "$OUT/qwen.err") | $(tail -n 6 "$OUT/serve-qwen.log")"
+  fi
+  kill "$QPID" 2> /dev/null || true
+fi
+
 [ "$YMM" -eq 0 ] || { echo "AVX registers found in llama-server" >&2; exit 1; }
 [ "$EMU" -eq 0 ] || { echo "llama-server did not run on the emulated Core 2" >&2; exit 1; }
 echo "RESULT: PASS"
