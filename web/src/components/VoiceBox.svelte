@@ -1,10 +1,25 @@
 <script lang="ts">
   import { api, ApiError, type VoiceResult } from '../lib/api';
+  import type { OrbMood } from '../lib/orb';
+  import Orb from './Orb.svelte';
 
   let text = $state('');
   let busy = $state(false);
   let error = $state('');
+  let focused = $state(false);
   let history = $state<{ said: string; result: VoiceResult }[]>([]);
+  // After a reply the orb speaks or shows a problem for a moment, then settles.
+  let after = $state<OrbMood | null>(null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const mood = $derived<OrbMood>(busy ? 'thinking' : (after ?? (focused ? 'listening' : 'idle')));
+
+  function settle(next: OrbMood, ms: number) {
+    clearTimeout(timer);
+    after = next;
+    timer = setTimeout(() => (after = null), ms);
+  }
+  $effect(() => () => clearTimeout(timer));
 
   async function send(e: SubmitEvent) {
     e.preventDefault();
@@ -16,8 +31,10 @@
       const result = await api.voice(said);
       history = [{ said, result }, ...history].slice(0, 5);
       text = '';
+      settle(good(result.outcome) ? 'speaking' : 'error', 2600);
     } catch (err) {
       error = err instanceof ApiError ? err.message : 'Something went wrong.';
+      settle('error', 2600);
     } finally {
       busy = false;
     }
@@ -27,6 +44,7 @@
 </script>
 
 <section class="card voice">
+  <Orb {mood} size={240} />
   <h2>Say it</h2>
   <p class="muted small">
     Type a command, for example “turn off the kitchen light”, “set the thermostat to twenty two”,
@@ -39,6 +57,8 @@
       id="voice-text"
       type="text"
       bind:value={text}
+      onfocus={() => (focused = true)}
+      onblur={() => (focused = false)}
       maxlength="300"
       autocomplete="off"
       placeholder="Turn on the living room light"
