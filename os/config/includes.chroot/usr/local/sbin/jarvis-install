@@ -174,6 +174,9 @@ else
 fi
 udevadm settle --timeout=30 || true
 partprobe "$DISK" || true
+# partprobe makes udev re-create the partition nodes; wait until it is done, or
+# the next command can hit a node that is briefly missing or busy.
+udevadm settle --timeout=30 || true
 for p in $ESPP $BOOTP $ROOTP; do
   for _ in $(seq 1 30); do [ -b "$p" ] && break; sleep 1; done
   [ -b "$p" ] || die "partition $p did not appear"
@@ -182,7 +185,16 @@ done
 # ---- encryption ----------------------------------------------------------------
 STEP="encrypting"
 say "Creating the encrypted volume (LUKS2)"
-cryptsetup luksFormat --type luks2 --batch-mode --key-file "$WORK/pass" "$ROOTP"
+# The first attempt can fail while udev is still settling after partitioning
+# (seen once in CI as exit 4); retry a few times before giving up.
+FORMATTED=0
+for attempt in 1 2 3 4 5; do
+  if cryptsetup luksFormat --type luks2 --batch-mode --key-file "$WORK/pass" "$ROOTP"; then FORMATTED=1; break; fi
+  say "The disk was not ready yet (attempt $attempt of 5); trying again"
+  udevadm settle --timeout=30 || true
+  sleep 2
+done
+[ "$FORMATTED" = 1 ] || die "the encrypted volume could not be created"
 cryptsetup luksAddKey --key-file "$WORK/pass" "$ROOTP" "$WORK/recovery"
 cryptsetup open --key-file "$WORK/pass" "$ROOTP" "$MAPNAME"
 

@@ -11,8 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p vendor
 
-OLLAMA_VERSION="${OLLAMA_VERSION:-}"   # e.g. v0.12.3; empty = newest release (learning run only)
-OLLAMA_SHA256="${OLLAMA_SHA256:-}"     # sha256 of the tarball, to pin
+OLLAMA_VERSION="${OLLAMA_VERSION:-v0.40.16}"   # empty = newest release (learning run only)
+# Pinned from the first CI run (2026-11-14): the hash of the tarball as GitHub served it then.
+OLLAMA_SHA256="${OLLAMA_SHA256:-87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d}"
 
 if [ -z "$OLLAMA_VERSION" ]; then
   OLLAMA_VERSION=$(curl -fsSL --retry 3 https://api.github.com/repos/ollama/ollama/releases/latest | jq -r .tag_name)

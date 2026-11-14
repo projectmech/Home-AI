@@ -87,6 +87,22 @@ kill "$SERVE" 2>/dev/null || true
 wait "$SERVE" 2>/dev/null || true
 trap - EXIT
 
+# ---- 2b. which CPU does the ollama binary itself need? ---------------------------------
+# The first run died with an illegal instruction under Penryn. Try the same
+# binary on a few emulated CPUs to find the lowest one it runs on, and look at
+# the last instructions the emulator translated before it stopped.
+{
+  for cpu in Penryn Nehalem SandyBridge Haswell; do
+    r=$(QEMU_CPU=$cpu timeout 120 qemu-x86_64 -cpu "$cpu" "$OL" --version 2>&1 | head -n 3 | tr '\n' ' ') || true
+    echo "$cpu: ${r:-no output}"
+  done
+} > "$OUT/cpu-sweep.txt" 2>&1 || true
+note "ollama --version on emulated CPUs (Penryn = Core 2, Nehalem adds SSE4.2/POPCNT, SandyBridge adds AVX)" "$(cat "$OUT/cpu-sweep.txt")"
+QEMU_CPU=Penryn timeout 180 qemu-x86_64 -cpu Penryn -d in_asm,nochain -D "$OUT/asm.log" "$OL" --version > /dev/null 2>&1 || true
+tail -n 40 "$OUT/asm.log" > "$OUT/asm-tail.txt" 2>/dev/null || true
+note "last instructions translated before the emulated Core 2 stopped" "$(cat "$OUT/asm-tail.txt")"
+rm -f "$OUT/asm.log"
+
 # ---- 3. the same server under an emulated Core 2 -----------------------------------------
 # QEMU_CPU makes the child processes Ollama starts (its runner) emulate it too.
 export QEMU_CPU=Penryn
