@@ -1,0 +1,35 @@
+name: Voice bench (rejected engines)
+
+# Evidence for docs/adr/0005-voice-architecture.md. Both are EXPECTED TO FAIL
+# on an emulated Core 2 and are therefore run by hand only:
+#  - Vosk 0.3.45 prebuilt: fast, but its start-up code executes an AVX
+#    instruction (vpxor) and dies with an illegal instruction.
+#  - whisper.cpp v1.7.4 tiny.en: contains AVX despite every AVX option off, and
+#    is about 1.8 s per 1.9 s of speech on one modern core (a Core 2 would be
+#    4 to 6 times slower).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vosk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user unzip binutils build-essential curl
+      - run: bash voice/bench.sh
+
+  whisper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user binutils build-essential cmake git curl bc
+      - run: bash voice/bench-whisper.sh
