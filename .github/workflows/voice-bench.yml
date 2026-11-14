@@ -1,7 +1,8 @@
 name: Voice bench
 
-# Can the 2010 Core 2 Duo run a local command recogniser? See voice/bench.sh and
-# docs/adr/0005-voice-architecture.md. Downloads are hash-checked.
+# Can the 2010 Core 2 Duo run a local speech recogniser? See voice/bench.sh,
+# voice/bench-whisper.sh and docs/adr/0005-voice-architecture.md. Downloads are
+# hash-checked once pinned; the first runs learn the hashes.
 on:
   workflow_dispatch:
   push:
@@ -14,16 +15,28 @@ permissions:
   contents: read
 
 jobs:
-  stt:
+  vosk:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user unzip binutils build-essential curl
-      - name: Run the benchmark (first run learns the download hashes)
+      - name: Vosk command recogniser, native and as an emulated Core 2
         env:
           ALLOW_UNPINNED: "1"
         run: bash voice/bench.sh
+
+  whisper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user binutils build-essential cmake git curl bc
+      - name: whisper.cpp without AVX, native and as an emulated Core 2
+        run: bash voice/bench-whisper.sh

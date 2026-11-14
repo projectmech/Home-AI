@@ -15,7 +15,8 @@ note() {
   printf '::notice title=%s::%s\n' "$1" "$(printf '%s' "$2" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
 }
 
-bash fetch.sh
+bash fetch.sh | tee "$OUT/fetch.txt"
+note "download hashes (pin these in voice/fetch.sh)" "$(grep 'sha256=' "$OUT/fetch.txt")"
 LIBDIR=$(dirname "$(find vendor/lib -name libvosk.so | head -n 1)")
 echo "libvosk in $LIBDIR"
 
@@ -24,6 +25,13 @@ objdump -d --no-show-raw-insn "$LIBDIR/libvosk.so" > "$OUT/libvosk.asm" 2>/dev/n
 YMM=$(grep -cE '%(ymm|zmm)[0-9]+' "$OUT/libvosk.asm" || true)
 VEX=$(grep -cE '^[[:space:]]*[0-9a-f]+:[[:space:]]+v[a-z0-9]+[[:space:]]' "$OUT/libvosk.asm" || true)
 note "libvosk instruction scan" "lines using ymm/zmm registers: $YMM; VEX (AVX-encoded) instructions: $VEX. Non-zero is only a problem if that code runs on a CPU without AVX; the Penryn run below decides."
+# Which functions hold the AVX code? OpenBLAS ships per-CPU kernels (names with
+# HASWELL, SKYLAKEX, ZEN ...) and picks one at run time: those are harmless.
+# AVX anywhere else means the library itself needs an AVX CPU.
+awk '/^[0-9a-f]+ <.*>:$/ {fn=$2} /^[[:space:]]*[0-9a-f]+:[[:space:]]+v[a-z0-9]+[[:space:]]/ {c[fn]++} END {for (f in c) print c[f], f}' "$OUT/libvosk.asm" | sort -rn > "$OUT/vex-by-function.txt"
+KERNEL_RE='HASWELL|SKYLAKEX|ZEN|SANDYBRIDGE|BULLDOZER|PILEDRIVER|STEAMROLLER|EXCAVATOR|COOPERLAKE|SAPPHIRERAPIDS'
+OTHER=$(grep -vE "$KERNEL_RE" "$OUT/vex-by-function.txt" | wc -l || true)
+note "AVX outside the per-CPU kernels" "functions with AVX that are NOT named like a per-CPU kernel: $OTHER. Top 12 of all: $(head -n 12 "$OUT/vex-by-function.txt" | tr '\n' ';') Top 12 outside kernels: $(grep -vE "$KERNEL_RE" "$OUT/vex-by-function.txt" | head -n 12 | tr '\n' ';')"
 
 # ---- build the recogniser ----------------------------------------------------
 gcc -O2 -Wall -o "$OUT/vosk-recognise" stt/vosk-recognise.c -I"$LIBDIR" -L"$LIBDIR" -lvosk -Wl,-rpath,"$PWD/$LIBDIR"
@@ -62,6 +70,8 @@ for s in "${SAMPLES[@]}"; do
   sox "$OUT/s$i.wav" -r 16000 -c 1 -b 16 -e signed-integer -t raw "$OUT/s$i.raw"
 done
 
+norm() { printf '%s' "$1" | tr ' ' '\n' | { grep -vxE 'set|to|the' || true; } | tr '\n' ' '; }
+
 RESULT_OK=0
 run_all() { # label, then the command prefix (may be just "env")
   local label=$1
@@ -77,7 +87,8 @@ run_all() { # label, then the command prefix (may be just "env")
     fi
     heard=$(printf '%s' "$json" | sed -n 's/.*"text" *: *"\([^"]*\)".*/\1/p')
     verdict=WRONG
-    if [ "$heard" = "$s" ]; then
+    # The command parser ignores "set", "to" and "the", and so does this check.
+    if [ "$(norm "$heard")" = "$(norm "$s")" ]; then
       verdict=ok
       ok=$((ok + 1))
     fi
@@ -94,6 +105,25 @@ NATIVE_OK=$RESULT_OK
 # ---- the same code on an emulated Core 2 --------------------------------------
 EMU_OK=-1
 if command -v qemu-x86_64 > /dev/null; then
+  # Diagnosis: does forcing OpenBLAS to a Core 2 kernel make it run?
+  diag=""
+  for core in none PENRYN CORE2; do
+    if [ "$core" = none ]; then unset OPENBLAS_CORETYPE; else export OPENBLAS_CORETYPE=$core; fi
+    if timeout 600 qemu-x86_64 -cpu Penryn -L / "$OUT/vosk-recognise" vendor/model "$OUT/grammar.json" < "$OUT/s1.raw" > "$OUT/d.out" 2> "$OUT/d.err"; then
+      diag="$diag
+OPENBLAS_CORETYPE=$core: runs ($(tail -n 1 "$OUT/d.err"))"
+    else
+      diag="$diag
+OPENBLAS_CORETYPE=$core: FAILED ($(tail -n 1 "$OUT/d.err"))"
+    fi
+  done
+  unset OPENBLAS_CORETYPE
+  note "emulated Core 2 diagnosis" "$diag"
+  # Where does it die? The last translated instructions before the illegal one.
+  timeout 900 qemu-x86_64 -cpu Penryn -L / -d in_asm -D "$OUT/asm.log" "$OUT/vosk-recognise" vendor/model "$OUT/grammar.json" < "$OUT/s1.raw" > /dev/null 2>&1 || true
+  note "last instructions before the crash" "$(grep -E '^0x' "$OUT/asm.log" | tail -n 8)"
+  rm -f "$OUT/asm.log"
+  RESULT_OK=0   # a failed run must not inherit the native result
   run_all "emulated Core 2 (qemu-user Penryn; timing is NOT representative)" qemu-x86_64 -cpu Penryn -L / || true
   EMU_OK=$RESULT_OK
 else
