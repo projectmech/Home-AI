@@ -67,3 +67,24 @@ yet.
    loopback rule above would need a deliberate change.
 5. **Safety does not depend on the model.** An "uncensored" or any other model can
    say what it likes; what it can DO is decided by the grammar and the policy.
+
+## Update 2026-11-15: a Core 2 CAN run llama.cpp; earlier "needs AVX" verdicts were a test artifact
+- The CI runner (ubuntu-latest) has a C library that refuses to run on an emulated
+  Core 2 ("CPU does not support x86-64-v3"), so EVERY program stopped at the same
+  instruction there, including a llama.cpp with no AVX at all. The earlier verdicts
+  for Vosk, whisper.cpp and Ollama's binary ("needs AVX / a Haswell CPU") were
+  therefore not evidence about those programs.
+- Inside `debian:trixie` (the OS image's base, baseline x86-64 C library) the same
+  tests behave: an ordinary program runs on an emulated Core 2, and **llama.cpp's
+  `llama-server`, built from source with `-march=core2`, runs and generates text on
+  an emulated Core 2 (Penryn), Nehalem, SandyBridge and Haswell** (CI run
+  43654703294, llama.cpp tag v1.0.0, commit b1b770d). Its binary contains no AVX, no
+  SSE4.2 and no POPCNT. The only instruction a Core 2 lacks that it does contain is
+  `lzcnt`, inside the FLAC audio decoder the server bundles; nothing in this project
+  decodes FLAC.
+- This confirms decision 3: the target model server is `llama-server` built for the
+  Core 2. Not yet done: package it in the OS image, run it as a service on
+  127.0.0.1, and fetch a pinned GGUF model. Real speed still needs the Mac mini.
+- Vosk and whisper.cpp are worth retesting in the same container (workflow "Voice
+  bench (Vosk and whisper.cpp recheck)", run by hand). Vosk got 8 of 8 synthetic
+  commands natively against PocketSphinx's 7 of 8.

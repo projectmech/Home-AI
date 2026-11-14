@@ -25,3 +25,6 @@ Pairing and transport: one-time code, per-client bearer token (hashed at rest), 
 
 ## Addendum 2026-11-15 — local AI assistant (see docs/AI.md)
 Owner's choice: configure the AI from open-source programs such as Ollama, default model `llama2-uncensored:latest`. Built: `server/src/assistant.rs` (OpenAI-style client for a loopback model server, settings, status, tolerant answer parsing). The model proposes a plain-words command; the existing grammar, policy and audit decide, so it cannot unlock or do anything the grammar does not allow. Not solved: running a model on the Core 2 itself (Ollama's server crashes on an emulated Core 2; a 7B model would be far too slow anyway). Not packaged in the OS image.
+
+## Correction 2026-11-15 — Core 2 tests must run in a Debian container
+Emulated-Core-2 tests run directly on the ubuntu-latest runner are invalid: its C library needs x86-64-v3, so every program stops at the same place (identical instruction bytes for Vosk and for an AVX-free llama.cpp). The "Vosk / whisper.cpp / Ollama needs AVX" findings above were an artifact. Run such tests in debian:trixie, with a /bin/true control. PocketSphinx was already tested that way. llama.cpp's llama-server built with -march=core2 runs on an emulated Core 2 in that setting. Vosk and whisper.cpp are to be retested.
