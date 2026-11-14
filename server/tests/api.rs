@@ -862,8 +862,10 @@ async fn voice_commands_use_the_same_policy_path() {
     // Questions and unknown words get a reply and execute nothing.
     let r = voice(&app, &admin, "what is the temperature in the bedroom").await;
     assert_eq!(r.body["outcome"], "answer");
+    // Words the grammar does not know go to the assistant; no model server runs
+    // in this test, so the answer is the polite "unavailable".
     let r = voice(&app, &admin, "sing me a song").await;
-    assert_eq!(r.body["outcome"], "unknown");
+    assert_eq!(r.body["outcome"], "unavailable");
 
     // Oversized input is refused.
     let long = "turn on the light ".repeat(40);
