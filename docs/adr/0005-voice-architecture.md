@@ -19,3 +19,6 @@ The Mac mini (Core 2 Duo, no AVX) is the host. Real microphones and speakers liv
 
 ## Not built yet
 Audio transport and pairing; the local recogniser and wake word; speech output; room-unit software; cloud opt-in; per-user voice identity; multi-device ("all the lights"); rooms from the home settings in the grammar.
+
+## Slice 2 (built, CI run 43647059297)
+Pairing and transport: one-time code, per-client bearer token (hashed at rest), revocation, `/api/voice/stream` carrying JSON commands and bounded 16 kHz mono PCM, shared command path `run_voice_text`. Clients act as `standard` at most. Still open: admin screen, recogniser and wake word, speech output, room-unit software.
