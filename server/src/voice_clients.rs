@@ -7,6 +7,8 @@
 //! token is stored. An administrator can revoke a client at any time; a revoked
 //! client's open connection is closed within one heartbeat.
 
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -281,12 +283,130 @@ fn client_for_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<Voi
     }))
 }
 
-/// The speech recogniser. None is installed yet, so audio is received, bounded
-/// and measured but not understood; a client with its own recogniser sends
-/// `{"type":"command","text":...}` instead. This is the single hook where the
-/// local recogniser (see docs/adr/0005-voice-architecture.md) will plug in.
-fn recognise(_pcm: &[u8]) -> Option<String> {
-    None
+/// What the speech recogniser made of an utterance.
+enum Heard {
+    /// No recogniser is installed on this host.
+    Missing,
+    /// It ran but heard nothing it knows (silence, noise, or something else).
+    Nothing,
+    Text(String),
+}
+
+/// The speech recogniser is PocketSphinx (a BSD-style licence), run as a
+/// separate short-lived process. It is given a grammar built from the live
+/// device registry (`voice::jsgf`), so it can only ever report phrases the
+/// command parser understands. It runs inside this service's sandbox: read-only
+/// system, private temp directory, no network, no new privileges. A client that
+/// has its own recogniser sends `{"type":"command","text":...}` instead.
+/// `APP_STT_BIN` overrides the program path; an empty value turns it off.
+fn recogniser_binary() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("APP_STT_BIN") {
+        let p = PathBuf::from(p);
+        return p.is_file().then_some(p);
+    }
+    ["/usr/bin/pocketsphinx_continuous", "/usr/local/bin/pocketsphinx_continuous"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+}
+
+/// A WAV header for 16 kHz, 16-bit, mono PCM.
+fn wav_bytes(pcm: &[u8]) -> Vec<u8> {
+    let len = pcm.len() as u32;
+    let mut w = Vec::with_capacity(pcm.len() + 44);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&1u16.to_le_bytes()); // mono
+    w.extend_from_slice(&16_000u32.to_le_bytes());
+    w.extend_from_slice(&32_000u32.to_le_bytes()); // bytes per second
+    w.extend_from_slice(&2u16.to_le_bytes()); // bytes per sample frame
+    w.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&len.to_le_bytes());
+    w.extend_from_slice(pcm);
+    w
+}
+
+/// One recognition at a time on a two-core computer.
+static STT_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+const STT_TIMEOUT: Duration = Duration::from_secs(40);
+
+async fn recognise(s: &AppState, pcm: &[u8]) -> Heard {
+    let Some(bin) = recogniser_binary() else {
+        return Heard::Missing;
+    };
+    let Ok(_turn) = STT_GATE.acquire().await else {
+        return Heard::Nothing;
+    };
+    let Ok(known) = s.db.call(|c| crate::devices::list(c)).await else {
+        return Heard::Nothing;
+    };
+    let Some(grammar) = crate::voice::jsgf(&known) else {
+        return Heard::Nothing;
+    };
+    let wav = wav_bytes(pcm);
+    let heard = tokio::task::spawn_blocking(move || run_recogniser(&bin, &grammar, &wav))
+        .await
+        .ok()
+        .flatten();
+    match heard {
+        Some(text) if !text.is_empty() => Heard::Text(text),
+        _ => Heard::Nothing,
+    }
+}
+
+fn run_recogniser(bin: &Path, grammar: &str, wav: &[u8]) -> Option<String> {
+    let dir = std::env::temp_dir().join(format!("home-ai-stt-{}", &auth::new_token()[..16]));
+    std::fs::create_dir(&dir).ok()?;
+    let heard = recognise_in(&dir, bin, grammar, wav);
+    let _ = std::fs::remove_dir_all(&dir);
+    heard
+}
+
+fn recognise_in(dir: &Path, bin: &Path, grammar: &str, wav: &[u8]) -> Option<String> {
+    let gram_file = dir.join("home.gram");
+    let wav_file = dir.join("said.wav");
+    std::fs::write(&gram_file, grammar).ok()?;
+    std::fs::write(&wav_file, wav).ok()?;
+    let mut child = Command::new(bin)
+        .arg("-jsgf")
+        .arg(&gram_file)
+        .arg("-infile")
+        .arg(&wav_file)
+        .arg("-logfn")
+        .arg("/dev/null")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + STT_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    last_hypothesis(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The recogniser prints status words around the hypothesis; take the last real line.
+fn last_hypothesis(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty() && !l.starts_with("READY") && !l.starts_with("Listening"))
+        .map(str::to_lowercase)
 }
 
 /// Clients are not browsers: they authenticate with `Authorization: Bearer
@@ -414,13 +534,27 @@ async fn on_text(
             if audio.is_empty() {
                 return json!({ "type": "error", "message": "No audio was received." });
             }
-            match recognise(&audio) {
-                Some(heard) => command_reply(s, user, &heard).await,
-                None => json!({
+            let audio_ms = audio.len() / BYTES_PER_MS;
+            match recognise(s, &audio).await {
+                Heard::Text(heard) => {
+                    // "heard" lets the client say what it understood before acting
+                    // is trusted (for example to confirm "turn off" versus "turn on").
+                    let mut v = command_reply(s, user, &heard).await;
+                    v["heard"] = json!(heard);
+                    v["audio_ms"] = json!(audio_ms);
+                    v
+                }
+                Heard::Nothing => json!({
+                    "type": "reply",
+                    "outcome": "unknown",
+                    "reply": "I didn't catch that.",
+                    "audio_ms": audio_ms,
+                }),
+                Heard::Missing => json!({
                     "type": "reply",
                     "outcome": "unavailable",
                     "reply": "No speech recogniser is installed on this host yet.",
-                    "audio_ms": audio.len() / BYTES_PER_MS,
+                    "audio_ms": audio_ms,
                 }),
             }
         }
@@ -442,6 +576,47 @@ async fn command_reply(s: &AppState, user: &AuthUser, text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_real_line_is_the_hypothesis() {
+        let out = "READY....\nListening...\nTurn Off The Kitchen Light\n\n";
+        assert_eq!(
+            last_hypothesis(out).as_deref(),
+            Some("turn off the kitchen light")
+        );
+        assert_eq!(last_hypothesis("READY....\n\n"), None);
+        assert_eq!(last_hypothesis(""), None);
+    }
+
+    /// The plumbing: files written, program run with the grammar and audio, its
+    /// output read, and the scratch directory left to the caller to remove.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_is_run_with_the_grammar_and_the_audio() {
+        let work = tempfile::tempdir().unwrap();
+        let wav = wav_bytes(&[0u8; 64]);
+        let heard = recognise_in(work.path(), Path::new("/bin/echo"), "grammar", &wav);
+        let heard = heard.expect("echo ran");
+        assert!(heard.starts_with("-jsgf "), "{heard}");
+        assert!(heard.contains("-infile "), "{heard}");
+        assert!(work.path().join("home.gram").is_file());
+        assert!(work.path().join("said.wav").is_file());
+        let missing = Path::new("/nonexistent/recogniser");
+        assert!(recognise_in(work.path(), missing, "g", &wav).is_none());
+    }
+
+    #[test]
+    fn wav_header_matches_the_audio() {
+        let pcm = vec![0u8; 3200];
+        let wav = wav_bytes(&pcm);
+        assert_eq!(wav.len(), 44 + 3200);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 36 + 3200);
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 16_000);
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 3200);
+    }
 
     #[test]
     fn codes_are_unambiguous_and_normalised() {

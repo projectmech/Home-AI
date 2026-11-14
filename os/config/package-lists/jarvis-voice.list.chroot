@@ -1,0 +1,4 @@
+# Speech recogniser for voice commands (PocketSphinx, BSD-style licence): a small
+# C program plus a 37 MB English model, built for the baseline x86-64 CPU (no AVX).
+pocketsphinx
+pocketsphinx-en-us

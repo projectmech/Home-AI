@@ -410,6 +410,152 @@ pub fn parse(text: &str, devices: &[Device]) -> Intent {
     say("Sorry, I didn't understand that.", "unknown")
 }
 
+// ---- the recogniser's grammar ----------------------------------------------------
+// The speech recogniser (PocketSphinx) is given ONLY the phrases below, built from
+// the live device registry. Every phrase must be one `parse` understands: a test
+// checks that, so the recogniser can never "hear" something the parser rejects.
+
+fn number_words(n: u32) -> String {
+    const ONES: [&str; 20] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+        "eighteen", "nineteen",
+    ];
+    const TENS: [&str; 10] = [
+        "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    match n {
+        0..=19 => ONES[n as usize].to_string(),
+        20..=99 => {
+            let tens = TENS[(n / 10) as usize];
+            let unit = (n % 10) as usize;
+            if unit == 0 {
+                tens.to_string()
+            } else {
+                format!("{tens} {}", ONES[unit])
+            }
+        }
+        100 => "one hundred".to_string(),
+        _ => n.to_string(),
+    }
+}
+
+fn words_only(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// How a device can be named aloud: its room and its own name, without the kind word.
+fn labels(d: &Device, drop: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let before_paren = d.name.split('(').next().unwrap_or("");
+    for raw in [d.room.as_str(), before_paren] {
+        let words: Vec<String> = words_only(raw)
+            .into_iter()
+            .filter(|w| !drop.contains(&w.as_str()))
+            .collect();
+        let label = words.join(" ");
+        if !label.is_empty() && !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+fn push_unique(list: &mut Vec<String>, phrase: String) {
+    if !list.contains(&phrase) {
+        list.push(phrase);
+    }
+}
+
+/// Every phrase the recogniser may report, for the devices in the home.
+pub fn phrases(devices: &[Device]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let lights = devices.iter().filter(|d| d.kind == DeviceKind::Light).count();
+    if lights == 1 {
+        push_unique(&mut out, "turn on the light".to_string());
+        push_unique(&mut out, "turn off the light".to_string());
+    }
+    for d in devices {
+        match d.kind {
+            DeviceKind::Light => {
+                for label in labels(d, &["light", "lights", "lamp"]) {
+                    for state in ["on", "off"] {
+                        push_unique(&mut out, format!("turn {state} the {label} light"));
+                        push_unique(&mut out, format!("{label} light {state}"));
+                    }
+                    for percent in (10..=100).step_by(10) {
+                        let words = number_words(percent);
+                        push_unique(&mut out, format!("set the {label} light to {words} percent"));
+                    }
+                }
+            }
+            DeviceKind::Thermostat => {
+                for degrees in 16..=26 {
+                    let words = number_words(degrees);
+                    push_unique(&mut out, format!("set the thermostat to {words} degrees"));
+                }
+            }
+            DeviceKind::Speaker => {
+                for phrase in [
+                    "play the music",
+                    "pause the music",
+                    "resume the music",
+                    "turn on the music",
+                    "turn off the music",
+                    "volume up",
+                    "volume down",
+                ] {
+                    push_unique(&mut out, phrase.to_string());
+                }
+                for percent in (10..=100).step_by(10) {
+                    let words = number_words(percent);
+                    push_unique(&mut out, format!("set volume to {words} percent"));
+                }
+            }
+            DeviceKind::Lock => {
+                for label in labels(d, &["lock"]) {
+                    push_unique(&mut out, format!("lock the {label}"));
+                    // Recognised so that it can be refused politely: voice never unlocks.
+                    push_unique(&mut out, format!("unlock the {label}"));
+                }
+            }
+            DeviceKind::TemperatureSensor => {}
+        }
+    }
+    let readings = devices
+        .iter()
+        .filter(|d| matches!(d.kind, DeviceKind::TemperatureSensor | DeviceKind::Thermostat));
+    for d in readings {
+        let room = words_only(&d.room).join(" ");
+        if !room.is_empty() {
+            push_unique(&mut out, format!("what is the temperature in the {room}"));
+        }
+    }
+    if devices
+        .iter()
+        .any(|d| matches!(d.kind, DeviceKind::TemperatureSensor | DeviceKind::Thermostat))
+    {
+        push_unique(&mut out, "what is the temperature".to_string());
+    }
+    out
+}
+
+/// The recogniser's grammar (JSGF), or None when the home has nothing to control.
+pub fn jsgf(devices: &[Device]) -> Option<String> {
+    let list = phrases(devices);
+    if list.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "#JSGF V1.0;\ngrammar home;\npublic <command> = {};\n",
+        list.join(" | ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +563,48 @@ mod tests {
 
     fn devs() -> Vec<Device> {
         Simulator.discover()
+    }
+
+    #[test]
+    fn number_words_round_trip_through_the_parser() {
+        for n in [0u32, 7, 10, 16, 19, 20, 21, 40, 55, 99, 100] {
+            let words = number_words(n);
+            assert_eq!(find_number(&tokenize(&words)), Some(f64::from(n)), "{words}");
+        }
+    }
+
+    /// Every phrase the recogniser can report must be understood by the parser
+    /// (a command, an answer, or the polite refusal to unlock), never "unknown".
+    #[test]
+    fn every_recogniser_phrase_is_understood() {
+        let devices = devs();
+        let list = phrases(&devices);
+        assert!(list.len() > 60, "only {} phrases", list.len());
+        for phrase in &list {
+            match parse(phrase, &devices) {
+                Intent::Act { .. } => {}
+                Intent::Say { kind, reply } => {
+                    assert!(
+                        kind == "answer" || kind == "refused",
+                        "'{phrase}' gave {kind}: {reply}"
+                    );
+                }
+            }
+        }
+        assert!(list.iter().any(|p| p == "turn off the kitchen light"));
+        assert!(list.iter().any(|p| p == "lock the front door"));
+        assert!(list.iter().any(|p| p == "set volume to fifty percent"));
+        assert!(list.iter().any(|p| p == "what is the temperature in the bedroom"));
+    }
+
+    #[test]
+    fn the_grammar_is_valid_jsgf_and_empty_homes_have_none() {
+        let g = jsgf(&devs()).unwrap();
+        assert!(g.starts_with("#JSGF V1.0;\ngrammar home;\npublic <command> = "));
+        assert!(g.ends_with(";\n"));
+        assert!(!g.contains('"'));
+        assert_eq!(g.matches('<').count(), 1, "only the rule name uses <>");
+        assert!(jsgf(&[]).is_none());
     }
 
     fn act_of(text: &str) -> (String, Action) {

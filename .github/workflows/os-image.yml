@@ -114,6 +114,8 @@ jobs:
           need '(sbin|bin)/mkfs\.ext4$' 'mkfs.ext4'
           need '(sbin|bin)/unsquashfs$' 'unsquashfs'
           need '(sbin|bin)/smartctl$' 'smartctl (disk health)'
+          need '(sbin|bin)/pocketsphinx_continuous$' 'speech recogniser (PocketSphinx)'
+          need 'share/pocketsphinx/model/en-us/cmudict-en-us.dict$' 'speech recogniser English model'
           need '(sbin|bin)/plymouthd$' 'Plymouth (boot screen)'
           need 'plymouth/script\.so$' 'Plymouth script module'
           need 'plymouth/label[^/]*\.so$' 'Plymouth text labels'
