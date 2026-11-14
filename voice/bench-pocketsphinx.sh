@@ -18,8 +18,12 @@ apt-get install -y -qq --no-install-recommends pocketsphinx pocketsphinx-en-us e
   note "apt install FAILED" "$(tail -n 8 "$OUT/apt.log")"
   exit 1
 }
-PS=$(command -v pocketsphinx || true)
-[ -n "$PS" ] || { note "pocketsphinx" "binary not found after install"; exit 1; }
+PS=$(command -v pocketsphinx || command -v pocketsphinx_continuous || true)
+if [ -z "$PS" ]; then
+  note "pocketsphinx binary not found after install" "$(dpkg -l | grep -i -E 'sphinx' | awk '{print $2, $3}'; dpkg -L pocketsphinx 2> /dev/null | grep -E 'bin/' | head -n 20; apt-cache policy pocketsphinx | head -n 4)"
+  exit 1
+fi
+echo "using $PS"
 VERSION=$(dpkg-query -W -f='${Package} ${Version}\n' pocketsphinx pocketsphinx-en-us libpocketsphinx3 2> /dev/null | tr '\n' ';' || true)
 MODELDIR=$(dirname "$(find /usr/share -name 'cmudict-en-us.dict' 2> /dev/null | head -n 1)")
 note "pocketsphinx packages (Debian trixie)" "$VERSION model dir: $MODELDIR; sizes: $(du -sh /usr/share/pocketsphinx 2> /dev/null | cut -f1) model, $(du -shL "$PS" | cut -f1) binary"
@@ -71,7 +75,7 @@ done
 
 # Find a working command line (the CLI changed between versions).
 CMD=""
-for form in "-loglevel ERROR -jsgf $OUT/home.gram single" "-loglevel ERROR -jsgf $OUT/home.gram -infile"; do
+for form in "-loglevel ERROR -jsgf $OUT/home.gram single" "-loglevel ERROR -jsgf $OUT/home.gram -infile" "-jsgf $OUT/home.gram -logfn /dev/null -infile"; do
   # shellcheck disable=SC2086
   if out=$($PS $form "$OUT/a1.wav" 2> "$OUT/probe.err") && [ -n "$out" ]; then
     CMD="$form"
