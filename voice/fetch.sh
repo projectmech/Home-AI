@@ -8,10 +8,10 @@ cd "$(dirname "$0")"
 mkdir -p vendor
 VOSK_VERSION=0.3.45
 LIB_URL="https://github.com/alphacep/vosk-api/releases/download/v${VOSK_VERSION}/vosk-linux-x86_64-${VOSK_VERSION}.zip"
-LIB_SHA256=""
+LIB_SHA256="bbdc8ed85c43979f6443142889770ea95cbfbc56cffb5c5dcd73afa875c5fbb2"
 MODEL_NAME=vosk-model-small-en-us-0.15
 MODEL_URL="https://alphacephei.com/vosk/models/${MODEL_NAME}.zip"
-MODEL_SHA256=""
+MODEL_SHA256="30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
 
 fetch() { # url sha256 file
   [ -f "vendor/$3" ] || curl -fsSL --retry 3 -o "vendor/$3" "$1"

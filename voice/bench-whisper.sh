@@ -42,6 +42,15 @@ for f in $(find vendor/whisper.cpp/build -type f \( -name 'whisper-cli' -o -name
   AVX=$((AVX + c))
 done
 note "whisper.cpp AVX scan" "lines using ymm/zmm registers in the built binary and libraries: $AVX (0 is required for a Core 2)"
+# Why is there AVX with every AVX option off? Show the compile flags and the functions.
+FLAGS=$(find vendor/whisper.cpp/build -name flags.make -exec grep -hoE -- '-m(avx[0-9a-z]*|fma|f16c|sse[0-9a-z.]*|bmi2?|popcnt|arch=[a-z0-9-]+|tune=[a-z0-9-]+)|-DGGML_[A-Z0-9_]+' {} + | sort | uniq -c | sort -rn | head -n 20 || true)
+note "whisper.cpp compile flags seen" "$FLAGS"
+for f in $(find vendor/whisper.cpp/build -type f \( -name 'whisper-cli' -o -name '*.so*' \)); do
+  objdump -d --no-show-raw-insn "$f" 2> /dev/null | awk -v file="$(basename "$f")" '/^[0-9a-f]+ <.*>:$/ {fn=$2} /%(ymm|zmm)[0-9]+/ {c[file " " fn]++} END {for (k in c) print c[k], k}'
+done | sort -rn | head -n 10 > "$OUT/ymm-functions.txt"
+note "whisper.cpp functions using AVX registers" "$(cat "$OUT/ymm-functions.txt")"
+grep -E 'GGML_(AVX|AVX2|FMA|F16C|NATIVE|SSE42|BMI2|CPU)' vendor/whisper.cpp/build/CMakeCache.txt > "$OUT/cache.txt" || true
+note "whisper.cpp CMake cache (ggml options)" "$(cat "$OUT/cache.txt")"
 
 espeak-ng -v en-us -s 150 -w "$OUT/a.wav" "turn off the kitchen light"
 sox "$OUT/a.wav" -r 16000 -c 1 -b 16 "$OUT/a16.wav"

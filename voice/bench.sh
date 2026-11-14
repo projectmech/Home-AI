@@ -32,6 +32,16 @@ awk '/^[0-9a-f]+ <.*>:$/ {fn=$2} /^[[:space:]]*[0-9a-f]+:[[:space:]]+v[a-z0-9]+[
 KERNEL_RE='HASWELL|SKYLAKEX|ZEN|SANDYBRIDGE|BULLDOZER|PILEDRIVER|STEAMROLLER|EXCAVATOR|COOPERLAKE|SAPPHIRERAPIDS'
 OTHER=$(grep -vE "$KERNEL_RE" "$OUT/vex-by-function.txt" | wc -l || true)
 note "AVX outside the per-CPU kernels" "functions with AVX that are NOT named like a per-CPU kernel: $OTHER. Top 12 of all: $(head -n 12 "$OUT/vex-by-function.txt" | tr '\n' ';') Top 12 outside kernels: $(grep -vE "$KERNEL_RE" "$OUT/vex-by-function.txt" | head -n 12 | tr '\n' ';')"
+# Other instructions a Core 2 (Penryn: SSE4.1) lacks, outside the per-CPU
+# kernels: POPCNT, SSE4.2, BMI/ABM and friends. A library built for a newer
+# baseline (x86-64-v2/v3) would crash here even with no AVX in its own code.
+SUSPECT='popcnt|crc32|pcmpestri|pcmpistri|pcmpestrm|pcmpistrm|pcmpgtq|lzcnt|tzcnt|movbe|andn|blsr|blsi|blsmsk|bextr|shlx|shrx|sarx|rorx|mulx|pdep|pext|adcx|adox|rdtscp|rdrand|rdseed|cmpxchg16b|prefetchw'
+awk -v re="$KERNEL_RE" -v sus="^($SUSPECT)\$" '
+  /^[0-9a-f]+ <.*>:$/ { fn = $2; next }
+  fn !~ re { n = split($0, a, "\t"); if (n >= 2) { split(a[2], m, " "); if (m[1] ~ sus) { c[m[1]]++; f[m[1] " in " fn]++ } } }
+  END { for (k in c) print "TOTAL", c[k], k; for (k in f) print "IN", f[k], k }' "$OUT/libvosk.asm" | sort -k2 -rn > "$OUT/suspects.txt"
+note "instructions a Core 2 lacks, outside the OpenBLAS kernels" "$(head -n 25 "$OUT/suspects.txt")
+(empty means none found)"
 
 # ---- build the recogniser ----------------------------------------------------
 gcc -O2 -Wall -o "$OUT/vosk-recognise" stt/vosk-recognise.c -I"$LIBDIR" -L"$LIBDIR" -lvosk -Wl,-rpath,"$PWD/$LIBDIR"
@@ -120,9 +130,17 @@ OPENBLAS_CORETYPE=$core: FAILED ($(tail -n 1 "$OUT/d.err"))"
   unset OPENBLAS_CORETYPE
   note "emulated Core 2 diagnosis" "$diag"
   # Where does it die? The last translated instructions before the illegal one.
-  timeout 900 qemu-x86_64 -cpu Penryn -L / -d in_asm -D "$OUT/asm.log" "$OUT/vosk-recognise" vendor/model "$OUT/grammar.json" < "$OUT/s1.raw" > /dev/null 2>&1 || true
-  note "last instructions before the crash" "$(grep -E '^0x' "$OUT/asm.log" | tail -n 8)"
-  rm -f "$OUT/asm.log"
+  # Does it already die while loading (no audio), or only while decoding?
+  if timeout 600 qemu-x86_64 -cpu Penryn -L / "$OUT/vosk-recognise" vendor/model "$OUT/grammar.json" < /dev/null > /dev/null 2> "$OUT/load.err"; then
+    note "emulated Core 2, load only (no audio)" "survives loading the model and grammar"
+  else
+    note "emulated Core 2, load only (no audio)" "dies during load: $(tail -n 1 "$OUT/load.err")"
+  fi
+  timeout 900 qemu-x86_64 -cpu Penryn -L / -strace -d in_asm -D "$OUT/asm.log" "$OUT/vosk-recognise" vendor/model "$OUT/grammar.json" < "$OUT/s1.raw" > /dev/null 2> "$OUT/strace.log" || true
+  note "last translated instructions before the crash" "$(tail -n 30 "$OUT/asm.log" | cut -c1-110)"
+  note "where libvosk was mapped (strace)" "$(grep -A14 -m1 'libvosk.so' "$OUT/strace.log" | cut -c1-160)"
+  note "last system calls before the crash" "$(tail -n 8 "$OUT/strace.log" | cut -c1-160)"
+  rm -f "$OUT/asm.log" "$OUT/strace.log"
   RESULT_OK=0   # a failed run must not inherit the native result
   run_all "emulated Core 2 (qemu-user Penryn; timing is NOT representative)" qemu-x86_64 -cpu Penryn -L / || true
   EMU_OK=$RESULT_OK

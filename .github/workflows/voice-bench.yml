@@ -25,8 +25,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends espeak-ng sox libsox-fmt-all qemu-user unzip binutils build-essential curl
       - name: Vosk command recogniser, native and as an emulated Core 2
-        env:
-          ALLOW_UNPINNED: "1"
         run: bash voice/bench.sh
 
   whisper:
