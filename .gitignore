@@ -18,3 +18,5 @@ dist/
 data/
 voice/vendor/
 voice/bench-out/
+llm/vendor/
+llm/bench-out/
