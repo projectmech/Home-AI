@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
+use crate::assistant;
 use crate::auth::{self, AuthUser, SetupTokenCheck};
 use crate::devices;
 use crate::error::ApiError;
@@ -48,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/audit", get(audit_log))
         .route("/ws", get(ws::ws_handler))
         .merge(voice_clients::routes())
+        .merge(assistant::routes())
         .fallback(|| async { ApiError::NotFound })
         .layer(middleware::from_fn(api_guard));
 
@@ -425,7 +427,7 @@ async fn device_action(
 }
 
 /// The one path every command takes, whether it came from a button or a voice.
-async fn run_device_action(
+pub(crate) async fn run_device_action(
     s: &AppState,
     user: &AuthUser,
     id: String,
@@ -539,12 +541,26 @@ pub(crate) async fn run_voice_text(
     user: &AuthUser,
     text: &str,
 ) -> Result<Value, ApiError> {
+    run_voice_text_with(s, user, text, true).await
+}
+
+/// `allow_ai` is false for a command the assistant itself proposed, so the
+/// assistant can never call itself.
+pub(crate) async fn run_voice_text_with(
+    s: &AppState,
+    user: &AuthUser,
+    text: &str,
+    allow_ai: bool,
+) -> Result<Value, ApiError> {
     if text.chars().count() > 300 {
         let msg = "That is too long for a voice command.";
         return Err(ApiError::BadRequest(msg.into()));
     }
     let known = s.db.call(|c| devices::list(c)).await?;
     let reply = match voice::parse(text, &known) {
+        Intent::Say { kind, .. } if kind == "unknown" && allow_ai => {
+            assistant::ask(s, user, text, &known).await
+        }
         Intent::Say { reply, kind } => json!({ "reply": reply, "outcome": kind }),
         Intent::Act {
             device_id,

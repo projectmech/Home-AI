@@ -22,3 +22,6 @@ Audio transport and pairing; the local recogniser and wake word; speech output; 
 
 ## Slice 2 (built, CI run 43647059297)
 Pairing and transport: one-time code, per-client bearer token (hashed at rest), revocation, `/api/voice/stream` carrying JSON commands and bounded 16 kHz mono PCM, shared command path `run_voice_text`. Clients act as `standard` at most. Still open: admin screen, recogniser and wake word, speech output, room-unit software.
+
+## Addendum 2026-11-15 — local AI assistant (see docs/AI.md)
+Owner's choice: configure the AI from open-source programs such as Ollama, default model `llama2-uncensored:latest`. Built: `server/src/assistant.rs` (OpenAI-style client for a loopback model server, settings, status, tolerant answer parsing). The model proposes a plain-words command; the existing grammar, policy and audit decide, so it cannot unlock or do anything the grammar does not allow. Not solved: running a model on the Core 2 itself (Ollama's server crashes on an emulated Core 2; a 7B model would be far too slow anyway). Not packaged in the OS image.

@@ -40,7 +40,7 @@
     }
   }
 
-  const good = (o: VoiceResult['outcome']) => o === 'confirmed' || o === 'answer';
+  const good = (o: VoiceResult['outcome']) => o === 'confirmed' || o === 'answer' || o === 'ai';
 </script>
 
 <section class="card voice">

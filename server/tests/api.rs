@@ -12,6 +12,7 @@ use home_ai::policy::Role;
 use home_ai::{api, AppState};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -1030,4 +1031,113 @@ async fn voice_clients_pair_once_and_stream_commands() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     let r = call(&app, Method::GET, CLIENTS_URI, Some(&admin), None).await;
     assert_eq!(r.body["clients"][0]["revoked"], true);
+}
+
+const ASSISTANT_URI: &str = "/api/settings/assistant";
+const STATUS_URI: &str = "/api/assistant/status";
+
+/// A stand-in for Ollama: answers every request with one chat completion.
+async fn fake_model(content: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 16384];
+                let _ = sock.read(&mut buf).await;
+                let body = json!({ "choices": [{ "message": { "content": content } }] });
+                let body = body.to_string();
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n", body.len());
+                let reply = format!("{head}connection: close\r\n\r\n{body}");
+                let _ = sock.write_all(reply.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+async fn put_assistant(app: &Router, cookie: &str, url: &str) -> Reply {
+    let body = json!({
+        "enabled": true,
+        "url": url,
+        "model": "llama2-uncensored:latest",
+        "timeout_s": 10,
+        "max_tokens": 64,
+        "persona": "Calm and dry.",
+    });
+    call(app, Method::PUT, ASSISTANT_URI, Some(cookie), Some(body)).await
+}
+
+/// The model only proposes plain-words commands; the grammar and the policy
+/// decide. It can never unlock, and a missing model never blocks the home.
+#[tokio::test]
+async fn assistant_answers_and_proposes_but_the_policy_decides() {
+    let state = new_state().await;
+    let app = api::router(state.clone());
+    setup_admin(&state, &app).await;
+    api::create_user(&state, "standard", ADMIN_PW, Role::Standard)
+        .await
+        .unwrap();
+    let admin = login(&app, "admin", ADMIN_PW).await;
+    let standard = login(&app, "standard", ADMIN_PW).await;
+    let ask = "tell me a joke about toast";
+
+    // Only administrators configure it, and only a model on this computer.
+    let r = call(&app, Method::GET, ASSISTANT_URI, Some(&standard), None).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = put_assistant(&app, &standard, "http://127.0.0.1:11434").await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = put_assistant(&app, &admin, "http://example.com:11434").await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = call(&app, Method::GET, ASSISTANT_URI, Some(&admin), None).await;
+    assert_eq!(r.body["assistant"]["model"], "llama2-uncensored:latest");
+
+    // The model proposes a command: it runs through the normal path.
+    let reply = r#"{"reply": "Of course.", "command": "turn off the kitchen light"}"#;
+    let url = fake_model(reply).await;
+    let r = put_assistant(&app, &admin, &url).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let r = voice(&app, &admin, ask).await;
+    assert_eq!(r.body["outcome"], "confirmed", "{}", r.body);
+    assert!(r.body["reply"].as_str().unwrap().contains("Of course."));
+    assert_eq!(r.body["device"]["id"], "sim-light-kitchen");
+    assert_eq!(r.body["device"]["state"]["on"], false);
+
+    // The model tries to unlock: refused, and the door stays locked.
+    let reply = r#"{"reply": "Certainly.", "command": "unlock the front door"}"#;
+    let url = fake_model(reply).await;
+    put_assistant(&app, &admin, &url).await;
+    let r = voice(&app, &admin, ask).await;
+    assert_eq!(r.body["outcome"], "refused", "{}", r.body);
+    let r = call(&app, Method::GET, "/api/devices", Some(&admin), None).await;
+    let devices = r.body["devices"].as_array().unwrap().clone();
+    let lock = devices.iter().find(|d| d["id"] == "sim-lock-front");
+    assert_eq!(lock.unwrap()["state"]["locked"], true);
+
+    // Plain answers, and answers that are not JSON, are spoken as they are.
+    let url = fake_model(r#"{"reply": "Bread with ambition.", "command": null}"#).await;
+    put_assistant(&app, &admin, &url).await;
+    let r = voice(&app, &admin, ask).await;
+    assert_eq!(r.body["outcome"], "ai");
+    assert_eq!(r.body["reply"], "Bread with ambition.");
+    let url = fake_model("Just words.").await;
+    put_assistant(&app, &admin, &url).await;
+    let r = voice(&app, &admin, ask).await;
+    assert_eq!(r.body["reply"], "Just words.");
+
+    // The status check sees the server (it has no model list, so no model).
+    let r = call(&app, Method::GET, STATUS_URI, Some(&admin), None).await;
+    assert_eq!(r.body["reachable"], true);
+    assert_eq!(r.body["model_present"], false);
+
+    // No model server: a polite answer, and home commands still work.
+    put_assistant(&app, &admin, "http://127.0.0.1:1").await;
+    let r = voice(&app, &admin, ask).await;
+    assert_eq!(r.body["outcome"], "unavailable");
+    let r = voice(&app, &admin, "turn on the kitchen light").await;
+    assert_eq!(r.body["outcome"], "confirmed");
 }

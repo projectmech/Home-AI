@@ -1,6 +1,9 @@
 //! Home AI core: a single-binary modular monolith.
 
 pub mod api;
+// Not rustfmt-formatted yet (no formatter in the authoring environment).
+#[rustfmt::skip]
+pub mod assistant;
 pub mod auth;
 pub mod db;
 pub mod devices;

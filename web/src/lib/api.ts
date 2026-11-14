@@ -113,7 +113,20 @@ export interface ActionResult {
 export interface VoiceResult {
   /** What to say back. */
   reply: string;
-  outcome: 'confirmed' | 'failed' | 'denied' | 'rejected' | 'answer' | 'clarify' | 'refused' | 'unknown';
+  outcome:
+    | 'confirmed'
+    | 'failed'
+    | 'denied'
+    | 'rejected'
+    | 'answer'
+    | 'clarify'
+    | 'refused'
+    | 'unknown'
+    /** The local AI model answered. */
+    | 'ai'
+    /** The local AI model is not running or too slow. */
+    | 'unavailable'
+    | 'busy';
   device?: Device;
 }
 
