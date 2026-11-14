@@ -112,7 +112,7 @@ jobs:
           need 'plymouth/script\.so$' 'Plymouth script module'
           need 'plymouth/label[^/]*\.so$' 'Plymouth text labels'
           need 'plymouth/themes/jarvis/jarvis\.script$' 'JARVIS boot theme script'
-          need 'plymouth/themes/jarvis/logo\.png$' 'JARVIS boot theme logo'
+          need 'plymouth/themes/jarvis/inner-right\.png$' 'boot theme mark shapes'
           need 'fonts/truetype/dejavu/DejaVuSans\.ttf$' 'font for boot screen text'
           forbid '(sbin|bin)/sshd$' 'SSH server'
           forbid 'usr/bin/sudo$' 'sudo'

@@ -7,6 +7,7 @@
   import Server from './pages/Server.svelte';
   import Activity from './pages/Activity.svelte';
   import Wizard from './pages/Wizard.svelte';
+  import Screen from './pages/Screen.svelte';
   import { loadPrefs } from './lib/prefs.svelte';
 
   type Phase = 'loading' | 'unreachable' | 'setup' | 'login' | 'app';
@@ -122,6 +123,8 @@
   <Wizard resume={phase === 'app'} onadmin={adminCreated} ondone={wizardDone} />
 {:else if phase === 'login'}
   <Auth mode="login" onsetup={() => {}} onlogin={signedIn} />
+{:else if user && path === '/screen'}
+  <Screen />
 {:else if user}
   <header>
     <strong>Home AI</strong>

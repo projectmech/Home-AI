@@ -4,7 +4,7 @@
 # Usage: os/test-install.sh <iso> <bios|efi> <pass|recovery> [splash]
 #
 # With "splash" the installed system starts with the JARVIS logo boot screen
-# (EFI only): the test checks the logo is drawn (solid bright areas, not console
+# (EFI only): the test checks the mark is drawn (solid bright areas, not console
 # text), then types the passphrase through the virtual keyboard, because with
 # a splash the unlock prompt is on the screen, not on the serial console.
 #
@@ -93,7 +93,7 @@ echo "installed; recovery key has the right shape"
 # ------------------------------------------- the boot splash (EFI, "splash" only)
 monitor() { printf '%s\n' "$1" | timeout 10 socat - "UNIX-CONNECT:$MSOCK" >/dev/null 2>&1 || true; }
 
-# Pixels in long bright horizontal runs (20 or more in a row): the logo's solid
+# Pixels in long bright horizontal runs (20 or more in a row): the mark's solid
 # bars. Console text is made of strokes only 1-2 pixels wide and never counts.
 blue_pixels() { # <ppm>
   local f=$1 hdr skip w
@@ -148,7 +148,7 @@ unlock_with_splash() { # <tag> <secret>
         sleep 3
       done
       sleep 5
-      fail "the boot splash did not draw the logo (solid bright pixels: $n); the unlock prompt was on the serial console instead"
+      fail "the boot splash did not draw the mark (solid bright pixels: $n); the unlock prompt was on the serial console instead"
     fi
     fail "the boot splash did not draw the logo (solid bright pixels: $n)"
   fi

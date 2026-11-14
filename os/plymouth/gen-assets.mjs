@@ -1,6 +1,6 @@
 // Generates the small boot-screen images (the typed-character dot and the
-// progress bar) for the JARVIS Plymouth theme. The logo itself, logo.png, is the
-// owner's picture and is not generated. No dependencies: `node os/plymouth/gen-assets.mjs`. The PNGs are
+// progress bar) for the JARVIS Plymouth theme. The five shapes of the Home AI mark are
+// drawn from the owner's home-ai-boot.html. No dependencies: `node os/plymouth/gen-assets.mjs`. The PNGs are
 // committed; run this only when the look changes.
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -61,15 +61,43 @@ const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 
 const dot = (nx, ny) => {
   const d = Math.hypot(nx, ny);
-  return [190, 240, 255, d >= 1 ? 0 : Math.pow(1 - d, 1.2)];
+  return [250, 250, 250, d >= 1 ? 0 : Math.pow(1 - d, 1.2)];
 };
 
-const bar = () => [90, 210, 255, 1];
+const bar = () => [221, 221, 221, 1];
+
+// The five shapes of the Home AI mark, from the owner's home-ai-boot.html
+// (viewBox 0 0 432 432). Each is its own full-size image so the boot script can
+// bring them in one after another. Rasterised with 4x4 supersampling.
+const SHAPES = {
+  'cap.png': [[107, 87], [327, 87], [327, 120], [107, 120]],
+  'left.png': [[83, 142], [122, 142], [122, 267], [200, 327], [200, 373], [83, 279]],
+  'right.png': [[313, 142], [352, 142], [352, 279], [235, 373], [235, 327], [313, 267]],
+  'inner-left.png': [[157, 142], [198, 142], [198, 296], [157, 265]],
+  'inner-right.png': [[237, 142], [278, 142], [278, 265], [237, 296]],
+};
+const inside = (poly, x, y) => {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+};
+const shape = (poly) => (nx, ny, w) => {
+  const px = ((nx + 1) / 2) * w;
+  const py = ((ny + 1) / 2) * w;
+  let hits = 0;
+  for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) if (inside(poly, px - 0.5 + (sx + 0.5) / 4, py - 0.5 + (sy + 0.5) / 4)) hits++;
+  return [250, 250, 250, hits / 16];
+};
 
 const files = {
   'dot.png': png(16, 16, dot),
   'bar.png': png(4, 4, bar),
 };
+for (const [name, poly] of Object.entries(SHAPES)) files[name] = png(432, 432, shape(poly));
 for (const [name, data] of Object.entries(files)) {
   writeFileSync(join(out, name), data);
   console.log(name, data.length, 'bytes');
