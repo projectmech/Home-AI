@@ -1,5 +1,6 @@
-// Generates the boot-screen images (plain RGBA PNGs) for the JARVIS Plymouth
-// theme. No dependencies: `node os/plymouth/gen-assets.mjs`. The PNGs are
+// Generates the small boot-screen images (the typed-character dot and the
+// progress bar) for the JARVIS Plymouth theme. The logo itself, logo.png, is the
+// owner's picture and is not generated. No dependencies: `node os/plymouth/gen-assets.mjs`. The PNGs are
 // committed; run this only when the look changes.
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -58,43 +59,6 @@ function png(w, h, pixel) {
 const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 
-// Soft glow around the orb.
-const halo = (nx, ny) => {
-  const d = Math.hypot(nx, ny);
-  return [60, 170, 255, d >= 1 ? 0 : Math.pow(1 - d, 2.4) * 0.9];
-};
-
-// The sphere: bright off-centre highlight fading to the edge colour.
-const core = (nx, ny, w) => {
-  const d = Math.hypot(nx, ny);
-  const edge = clamp((1 - d) * (w / 2));
-  const t = clamp(Math.hypot(nx + 0.3, ny + 0.35) / 1.1);
-  const stops = [
-    [0, [255, 255, 255, 0.95]],
-    [0.3, [70, 200, 255, 0.95]],
-    [1, [40, 150, 255, 0.35]],
-  ];
-  let c = stops[stops.length - 1][1];
-  for (let i = 0; i < stops.length - 1; i++) {
-    const [t0, c0] = stops[i];
-    const [t1, c1] = stops[i + 1];
-    if (t <= t1) {
-      c = mix(c0, c1, clamp((t - t0) / (t1 - t0)));
-      break;
-    }
-  }
-  return [c[0], c[1], c[2], c[3] * edge];
-};
-
-// A thin tilted-ellipse ring; the script rotates it.
-const ring = (nx, ny, w) => {
-  const a = 0.96;
-  const b = 0.34;
-  const f = Math.hypot(nx / a, ny / b);
-  const px = Math.abs(f - 1) * b * (w / 2);
-  return [120, 215, 255, clamp(1 - px / 1.3) * 0.55];
-};
-
 const dot = (nx, ny) => {
   const d = Math.hypot(nx, ny);
   return [190, 240, 255, d >= 1 ? 0 : Math.pow(1 - d, 1.2)];
@@ -103,9 +67,6 @@ const dot = (nx, ny) => {
 const bar = () => [90, 210, 255, 1];
 
 const files = {
-  'halo.png': png(512, 512, halo),
-  'core.png': png(256, 256, core),
-  'ring.png': png(256, 256, ring),
   'dot.png': png(16, 16, dot),
   'bar.png': png(4, 4, bar),
 };

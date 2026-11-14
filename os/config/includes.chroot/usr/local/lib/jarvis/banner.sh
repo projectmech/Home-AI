@@ -28,6 +28,9 @@ HOSTNAME_NOW=$(hostname)
 FP=$(/usr/local/bin/home-ai tls-fingerprint 2>/dev/null)
 TOKEN=$(/usr/local/bin/home-ai setup-token 2>/dev/null | grep -Eo '[0-9a-f]{64}' | head -n 1)
 dbg "waited ${i}s healthy=$(healthy && echo yes || echo no) ip=${IP:-none} token_len=${#TOKEN} fp_len=${#FP} tty1=$([ -c /dev/tty1 ] && echo yes || echo no) ttyS0=$([ -c /dev/ttyS0 ] && echo yes || echo no)"
+# Display state, for diagnosing the boot screen (states only, nothing secret).
+dbg "display: fb0=$([ -c /dev/fb0 ] && echo yes || echo no) dri=$(ls /dev/dri 2>/dev/null | tr '\n' ',') splash_arg=$(grep -qw splash /proc/cmdline && echo yes || echo no) plymouthd=$(pgrep -x plymouthd >/dev/null 2>&1 && echo running || echo not-running)"
+dmesg 2>/dev/null | grep -iE 'simpledrm|efifb|fb0|plymouth|framebuffer|drm' | head -n 8 | while IFS= read -r l; do dbg "dmesg: $l"; done
 [ -n "$IP" ] || IP="(no address yet - is the network cable plugged in?)"
 [ -n "$TOKEN" ] || TOKEN="(none - setup is already complete)"
 [ -n "$FP" ] || FP="(unavailable)"

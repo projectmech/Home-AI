@@ -3,8 +3,8 @@
 #
 # Usage: os/test-install.sh <iso> <bios|efi> <pass|recovery> [splash]
 #
-# With "splash" the installed system starts with the JARVIS orb boot screen
-# (EFI only): the test checks the screen is drawn (blue pixels, not console
+# With "splash" the installed system starts with the JARVIS logo boot screen
+# (EFI only): the test checks the logo is drawn (solid bright areas, not console
 # text), then types the passphrase through the virtual keyboard, because with
 # a splash the unlock prompt is on the screen, not on the serial console.
 #
@@ -53,7 +53,7 @@ fail() {
   echo "FAIL: $*"
   CTX=""
   if [ -n "$log" ] && [ -f "$log" ]; then
-    CTX=$( { clean "$log" | grep -aE 'jarvis|JARVIS|install|Failed|failed|error|Error|unlock|grub|cryptsetup' | tail -n 25; echo '-----'; clean "$log" | tail -n 12; } 2>/dev/null \
+    CTX=$( { clean "$log" | grep -aE 'jarvis|JARVIS|install|Failed|failed|error|Error|unlock|grub|cryptsetup|plymouth|Plymouth|Kernel command line|display:|dmesg:' | tail -n 30; echo '-----'; clean "$log" | tail -n 12; } 2>/dev/null \
       | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
   fi
   printf '::error title=install test %s: %s::%s %%0A%s\n' "$MODE" "$UNLOCK" "$*" "$CTX"
@@ -93,13 +93,20 @@ echo "installed; recovery key has the right shape"
 # ------------------------------------------- the boot splash (EFI, "splash" only)
 monitor() { printf '%s\n' "$1" | timeout 10 socat - "UNIX-CONNECT:$MSOCK" >/dev/null 2>&1 || true; }
 
-# Pixels that are clearly blue/cyan and bright: the orb. Console text is white
-# or grey (red about equal to blue) and does not count.
+# Pixels in long bright horizontal runs (20 or more in a row): the logo's solid
+# bars. Console text is made of strokes only 1-2 pixels wide and never counts.
 blue_pixels() { # <ppm>
-  local f=$1 skip
+  local f=$1 hdr skip w
   [ -s "$f" ] || { echo 0; return; }
-  skip=$(head -n 3 "$f" | wc -c)
-  tail -c +$((skip + 1)) "$f" | od -An -v -tu1 -w3 | awk '$3 > 150 && $3 > $1 + 40 { n++ } END { print n + 0 }'
+  hdr=$(head -n 3 "$f")
+  skip=$(printf '%s
+' "$hdr" | wc -c)
+  w=$(sed -n 2p <<< "$hdr" | cut -d' ' -f1)
+  tail -c +$((skip + 1)) "$f" | od -An -v -tu1 -w3 | awk -v w="$w" '
+    { x = (NR - 1) % w
+      if ($1 + $2 + $3 > 450) { run++ } else { if (run >= 20) n += run; run = 0 }
+      if (x == w - 1) { if (run >= 20) n += run; run = 0 } }
+    END { if (run >= 20) n += run; print n + 0 }'
 }
 
 # Type text through the virtual keyboard (the prompt is on the screen, not on
@@ -121,7 +128,7 @@ type_keys() { # <text>
 
 unlock_with_splash() { # <tag> <secret>
   local tag=$1 secret=$2 shot="install-$TAG-$tag.ppm" n=0 attempt
-  waitfor "$CURLOG" 'Linux version|Booting|EFI stub' 300 "the kernel to start"
+  waitfor "$CURLOG" 'Kernel command line' 300 "the kernel to start"
   for _ in $(seq 1 24); do
     monitor "screendump $shot"
     sleep 3
@@ -129,8 +136,22 @@ unlock_with_splash() { # <tag> <secret>
     [ "$n" -gt 3000 ] && break
     sleep 2
   done
-  echo "boot splash: $n blue pixels on screen"
-  [ "$n" -gt 3000 ] || fail "the boot splash did not draw the orb (blue pixels: $n)"
+  echo "boot splash: $n solid bright pixels on screen"
+  if [ "$n" -le 3000 ]; then
+    # Diagnosis: if the unlock prompt came up on the serial console the splash did
+    # not take over. Unlock that way so the system finishes booting and reports
+    # its display state (the "display:" and "dmesg:" lines), then fail.
+    if clean "$CURLOG" | grep -aq 'Please unlock disk'; then
+      { sleep 1; printf '%s\n' "$secret"; sleep 3; } | timeout 20 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true
+      for _ in $(seq 1 60); do
+        clean "$CURLOG" | grep -aqE 'dmesg: |Dashboard: +https://' && break
+        sleep 3
+      done
+      sleep 5
+      fail "the boot splash did not draw the logo (solid bright pixels: $n); the unlock prompt was on the serial console instead"
+    fi
+    fail "the boot splash did not draw the logo (solid bright pixels: $n)"
+  fi
   # The prompt may not be up yet when the splash first appears: type, and if the
   # system has not come up shortly after, type again.
   for attempt in 1 2 3; do
