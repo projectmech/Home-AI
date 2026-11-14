@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=JARVIS OS
+Description=A glowing orb that breathes while the system starts
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/jarvis
+ScriptFile=/usr/share/plymouth/themes/jarvis/jarvis.script

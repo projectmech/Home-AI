@@ -17,7 +17,7 @@ cd /build/lb
 # nomodeset: keep the plain firmware framebuffer for the text console; the
 # 2010 Mac mini's NVIDIA graphics is not needed on a headless server and a
 # native-mode graphics driver is the most likely cause of a black screen.
-APPEND="boot=live components hostname=jarvis nomodeset console=tty0 console=ttyS0,115200n8"
+APPEND="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=tty0 console=ttyS0,115200n8"
 if [ "${SELFTEST:-0}" = "1" ]; then APPEND="$APPEND jarvis.selftest=1"; fi
 
 lb config \
@@ -72,7 +72,7 @@ grep -q 'set timeout=5' "$PATCH/grub.cfg" || sed -i '1i set timeout=5' "$PATCH/g
 # ---- two extra menu entries: Install and Recovery ----------------------------
 # The default entry stays "Live system": nothing is ever installed or erased by
 # just starting the medium. The installer runs only from its own entry.
-APPEND_BASE="boot=live components hostname=jarvis nomodeset console=tty0"
+APPEND_BASE="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=tty0"
 cat >> "$PATCH/live.cfg" <<EOF
 
 label jarvis-install

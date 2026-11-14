@@ -28,3 +28,9 @@ systemctl enable jarvis-recovery.service
 systemctl list-unit-files systemd-networkd.service | grep -q systemd-networkd.service \
   || { echo "ERROR: systemd-networkd is not in this image" >&2; exit 1; }
 systemctl enable systemd-networkd.service
+
+# Boot screen: the JARVIS orb theme. Only used when a system is started with
+# "splash" (installed systems); the live image starts with plymouth.enable=0.
+[ -f /usr/share/plymouth/themes/jarvis/jarvis.plymouth ] \
+  || { echo "ERROR: the JARVIS Plymouth theme is missing from the image" >&2; exit 1; }
+plymouth-set-default-theme jarvis

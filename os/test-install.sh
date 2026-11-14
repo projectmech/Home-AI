@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end test of the JARVIS OS installer in QEMU (a Core 2 CPU model).
 #
-# Usage: os/test-install.sh <iso> <bios|efi> <pass|recovery>
+# Usage: os/test-install.sh <iso> <bios|efi> <pass|recovery> [splash]
+#
+# With "splash" the installed system starts with the JARVIS orb boot screen
+# (EFI only): the test checks the screen is drawn (blue pixels, not console
+# text), then types the passphrase through the virtual keyboard, because with
+# a splash the unlock prompt is on the screen, not on the serial console.
 #
 #  A. Boot the ISO in installer mode (jarvis.install=auto, test only) onto an
 #     empty virtual disk and wait for "JARVIS-INSTALL: DONE". The installer
@@ -19,6 +24,8 @@ set -euo pipefail
 ISO=$(readlink -f "${1:?usage: test-install.sh <iso> <bios|efi> <pass|recovery>}")
 MODE=${2:?}
 UNLOCK=${3:?}
+SPLASH=${4:-}
+TAG="$MODE-$UNLOCK${SPLASH:+-splash}"
 PORT=18443
 PASSPHRASE='jarvis-test-passphrase'
 ADMINPW='correct horse battery staple'
@@ -35,7 +42,7 @@ if [ "$MODE" = efi ]; then
   [ -n "$FW" ] || { echo "OVMF not found" >&2; exit 2; }
   EFI=(-bios "$FW")
 fi
-echo "mode=$MODE unlock-with=$UNLOCK accel=$ACCEL"
+echo "mode=$MODE unlock-with=$UNLOCK splash=${SPLASH:-no} accel=$ACCEL"
 
 QPID=""
 trap '[ -z "$QPID" ] || kill "$QPID" 2>/dev/null || true' EXIT
@@ -65,8 +72,9 @@ waitfor() { # <log> <pattern> <seconds> <description>
 # ---------------------------------------------------------------- A. install
 echo "== A. installing onto an empty disk ($MODE)"
 xorriso -osirrox on -indev "$ISO" -extract /live/vmlinuz "$WORK/vmlinuz" -extract /live/initrd.img "$WORK/initrd.img" >/dev/null 2>&1
-CURLOG="install-$MODE-$UNLOCK-A.log"; : > "$CURLOG"
-APPEND="boot=live components hostname=jarvis nomodeset console=ttyS0,115200n8 jarvis.install=auto jarvis.install.disk=/dev/vda jarvis.install.erase=ERASE-/dev/vda jarvis.install.pass=$PASSPHRASE"
+CURLOG="install-$TAG-A.log"; : > "$CURLOG"
+APPEND="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=ttyS0,115200n8 jarvis.install=auto jarvis.install.disk=/dev/vda jarvis.install.erase=ERASE-/dev/vda jarvis.install.pass=$PASSPHRASE"
+[ -z "$SPLASH" ] || APPEND="$APPEND jarvis.install.splash=1"
 qemu-system-x86_64 "${COMMON[@]}" "${EFI[@]}" -serial "file:$CURLOG" \
   -kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" -append "$APPEND" \
   -cdrom "$ISO" -drive "file=$DISK,if=virtio,format=qcow2" \
@@ -82,10 +90,63 @@ kill -0 "$QPID" 2>/dev/null && fail "the VM did not power off after the install"
 QPID=""
 echo "installed; recovery key has the right shape"
 
+# ------------------------------------------- the boot splash (EFI, "splash" only)
+monitor() { printf '%s\n' "$1" | timeout 10 socat - "UNIX-CONNECT:$MSOCK" >/dev/null 2>&1 || true; }
+
+# Pixels that are clearly blue/cyan and bright: the orb. Console text is white
+# or grey (red about equal to blue) and does not count.
+blue_pixels() { # <ppm>
+  local f=$1 skip
+  [ -s "$f" ] || { echo 0; return; }
+  skip=$(head -n 3 "$f" | wc -c)
+  tail -c +$((skip + 1)) "$f" | od -An -v -tu1 -w3 | awk '$3 > 150 && $3 > $1 + 40 { n++ } END { print n + 0 }'
+}
+
+# Type text through the virtual keyboard (the prompt is on the screen, not on
+# the serial console). Only lowercase letters and '-' are needed here.
+type_keys() { # <text>
+  local text=$1 i ch key
+  for ((i = 0; i < ${#text}; i++)); do
+    ch=${text:i:1}
+    case "$ch" in
+      [a-z]) key=$ch ;;
+      -) key=minus ;;
+      *) fail "type_keys cannot type '$ch'" ;;
+    esac
+    monitor "sendkey $key"
+    sleep 0.15
+  done
+  monitor "sendkey ret"
+}
+
+unlock_with_splash() { # <tag> <secret>
+  local tag=$1 secret=$2 shot="install-$TAG-$tag.ppm" n=0 attempt
+  waitfor "$CURLOG" 'Linux version|Booting|EFI stub' 300 "the kernel to start"
+  for _ in $(seq 1 24); do
+    monitor "screendump $shot"
+    sleep 3
+    n=$(blue_pixels "$shot")
+    [ "$n" -gt 3000 ] && break
+    sleep 2
+  done
+  echo "boot splash: $n blue pixels on screen"
+  [ "$n" -gt 3000 ] || fail "the boot splash did not draw the orb (blue pixels: $n)"
+  # The prompt may not be up yet when the splash first appears: type, and if the
+  # system has not come up shortly after, type again.
+  for attempt in 1 2 3; do
+    sleep 6
+    type_keys "$secret"
+    for _ in $(seq 1 30); do
+      clean "$CURLOG" | grep -aqE 'Dashboard: +https://[0-9.]+:8443' && return 0
+      sleep 3
+    done
+  done
+}
+
 # -------------------------------------------------- boot the installed disk
 boot_installed() { # <tag> <secret to type at the unlock prompt>
   local tag=$1 secret=$2
-  CURLOG="install-$MODE-$UNLOCK-$tag.log"; : > "$CURLOG"
+  CURLOG="install-$TAG-$tag.log"; : > "$CURLOG"
   SOCK="$WORK/ser-$tag.sock"; MSOCK="$WORK/mon-$tag.sock"
   qemu-system-x86_64 "${COMMON[@]}" "${EFI[@]}" \
     -chardev "socket,id=ser0,path=$SOCK,server=on,wait=off,logfile=$CURLOG" -serial chardev:ser0 \
@@ -93,8 +154,12 @@ boot_installed() { # <tag> <secret to type at the unlock prompt>
     -drive "file=$DISK,if=virtio,format=qcow2" \
     -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:8443" -device e1000,netdev=n0 &
   QPID=$!
-  waitfor "$CURLOG" 'Please unlock disk' 300 "the disk unlock prompt (the boot loader and initramfs must work)"
-  { sleep 2; printf '%s\n' "$secret"; sleep 4; } | timeout 20 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true
+  if [ -n "$SPLASH" ]; then
+    unlock_with_splash "$tag" "$secret"
+  else
+    waitfor "$CURLOG" 'Please unlock disk' 300 "the disk unlock prompt (the boot loader and initramfs must work)"
+    { sleep 2; printf '%s\n' "$secret"; sleep 4; } | timeout 20 socat - "UNIX-CONNECT:$SOCK" >/dev/null 2>&1 || true
+  fi
   waitfor "$CURLOG" 'Dashboard: +https://[0-9.]+:8443' 300 "the console box after unlocking"
   sleep 2
   TEXT=$(clean "$CURLOG")

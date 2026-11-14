@@ -225,11 +225,21 @@ printf '127.0.0.1 localhost\n127.0.1.1 jarvis\n' > "$TARGET/etc/hosts"
 echo "RESUME=none" > "$TARGET/etc/initramfs-tools/conf.d/resume"
 
 if [ "$AUTO" = 1 ]; then CONSOLE="console=tty0 console=ttyS0,115200n8"; else CONSOLE="console=ttyS0,115200n8 console=tty0"; fi
+# Real installs start with the JARVIS orb boot screen (the disk-unlock prompt is
+# then drawn by it). The unattended test install stays plain text unless the
+# test asks for the splash, so the serial-console tests keep working.
+SPLASH_ARGS="quiet splash"
+if [ "$AUTO" = 1 ]; then
+  if [ "$(cmdline_value jarvis.install.splash)" = "1" ]; then SPLASH_ARGS="splash"; else SPLASH_ARGS="plymouth.enable=0"; fi
+fi
 cat > "$TARGET/etc/default/grub" <<EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="JARVIS OS"
-GRUB_CMDLINE_LINUX_DEFAULT="nomodeset $CONSOLE"
+GRUB_COLOR_NORMAL="cyan/black"
+GRUB_COLOR_HIGHLIGHT="black/cyan"
+GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_CMDLINE_LINUX_DEFAULT="nomodeset $SPLASH_ARGS $CONSOLE"
 GRUB_CMDLINE_LINUX=""
 GRUB_DISABLE_OS_PROBER=true
 EOF
