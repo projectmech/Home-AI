@@ -76,6 +76,20 @@ ls -la "$OUT/bin" "$OUT/lib/ollama" > "$LOG/dist.txt"
 note "CPU level each built file asks for (baseline is fine; x86-64-v2/v3 is not)" "$(cat "$LOG/isa.txt")"
 note "built layout" "$(cat "$LOG/dist.txt")"
 
+# ---- where does the v3 requirement come from? --------------------------------------------------
+# Run 4 showed the built binary still asks for x86-64-v3 and dies on a Core 2.
+{
+  echo "ISA/AVX compile flags found in the build files (count flag):"
+  find build -name 'build.ninja' -print0 | xargs -0 grep -ohE -- '-march=[a-z0-9_.-]+|-m(avx[a-z0-9]*|fma|f16c|bmi2?|sse4[.0-9]*|popcnt|lzcnt|movbe|xsave)' 2>/dev/null | sort | uniq -c | sort -rn | head -n 12
+  echo "static libraries and objects whose notes say v3:"
+  for f in $(find build -name '*.a' -o -name '*.o' | head -n 400); do
+    if readelf -n "$f" 2>/dev/null | grep -qE 'x86 ISA (needed|used).*x86-64-v3'; then echo "  $f"; fi
+  done | head -n 12
+  echo "Go functions with AVX (VEX) instructions, most first:"
+  timeout 400 go tool objdump "$OUT/bin/ollama" 2>/dev/null | awk '/^TEXT /{fn=$2} $3 ~ /^V[A-Z0-9]+$/ || $4 ~ /^V[A-Z0-9]+$/ {c[fn]++} END {for (f in c) print c[f], f}' | sort -rn | head -n 15
+} > "$LOG/v3-origin.txt" 2>&1 || true
+note "where the x86-64-v3 requirement comes from" "$(cat "$LOG/v3-origin.txt")"
+
 # ---- does it start on an emulated Core 2? -----------------------------------------------------
 r=$(QEMU_CPU=Penryn timeout 180 qemu-x86_64 -cpu Penryn "$OUT/bin/ollama" --version 2>&1 | head -n 3 | tr '\n' ' ') || true
 note "built ollama --version on an emulated Core 2 (Penryn)" "${r:-no output}"

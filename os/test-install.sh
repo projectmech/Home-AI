@@ -48,13 +48,25 @@ QPID=""
 trap '[ -z "$QPID" ] || kill "$QPID" 2>/dev/null || true' EXIT
 
 clean() { tr -d '\r' < "$1" | sed -E 's/\x1b\[[0-9;?!]*[a-zA-Z]//g; s/\x1b\][0-9;]*[^\x07]*\x07?//g'; }
+# One GitHub annotation from the lines of a log that match a pattern. Each
+# annotation has its own size limit, so the diagnostics go in separate ones.
+ann() { # <title> <egrep pattern> <how many lines> <log>
+  local body
+  [ -f "$4" ] || return 0
+  body=$(clean "$4" 2>/dev/null | grep -aE "$2" | tail -n "$3" | cut -c1-250 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}') || true
+  [ -z "$body" ] || printf '::notice title=%s::%s\n' "$1" "$body"
+}
 fail() {
   local log=${CURLOG:-}
   echo "FAIL: $*"
   CTX=""
   if [ -n "$log" ] && [ -f "$log" ]; then
-    CTX=$( { { has_file=install-$TAG-A.log; [ -f "$has_file" ] && clean "$has_file" | grep -aE 'initramfs:' | head -n 40; } 2>/dev/null; clean "$log" | grep -aE 'jarvis|JARVIS|install|Failed|failed|error|Error|unlock|grub|cryptsetup|plymouth|Plymouth|Kernel command line|display:|dmesg:|plog' | tail -n 70; echo '-----'; clean "$log" | tail -n 12; } 2>/dev/null \
-      | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+    CTX=$( { clean "$log" | grep -aE 'jarvis-install: JARVIS-INSTALL|Failed|failed|error|Error|unlock|Kernel command line' | tail -n 12; echo '-----'; clean "$log" | tail -n 10; } 2>/dev/null \
+      | cut -c1-250 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+    ann "plymouth log: lines about the script, theme and images" 'plog-script' 14 "$log"
+    ann "plymouth log: how it ended" 'plog-tail' 24 "$log"
+    ann "display state of the installed system" 'display:|dmesg:' 12 "$log"
+    ann "theme files inside the installed initramfs" 'initramfs: .*(jarvis|script)' 12 "install-$TAG-A.log"
   fi
   printf '::error title=install test %s: %s::%s %%0A%s\n' "$MODE" "$UNLOCK" "$*" "$CTX"
   exit 1
