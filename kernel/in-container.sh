@@ -38,10 +38,28 @@ curl -fsSLO --retry 3 "$BASE/sha256sums.asc"
 export GNUPGHOME
 GNUPGHOME=$(mktemp -d)
 SIG="NOT verified"
-if gpg --batch --quiet --auto-key-locate wkd --locate-keys torvalds@kernel.org gregkh@kernel.org > gpg-keys.log 2>&1 \
-  && gpg --batch --verify sha256sums.asc > gpg-verify.log 2>&1; then
-  SIG="verified: $(grep -m1 'Good signature' gpg-verify.log | sed 's/^gpg: //')"
+# The only keys whose signature is accepted (kernel.org lists these fingerprints):
+#   Linus Torvalds       ABAF 11C6 5A29 70B1 30AB  E3C4 79BE 3E43 0041 1886
+#   Greg Kroah-Hartman   647F 2865 4894 E3BD 4571  99BE 38DB BDC8 6092 693E
+ALLOWED="ABAF11C65A2970B130ABE3C479BE3E4300411886 647F28654894E3BD457199BE38DBBDC86092693E"
+: > gpg-keys.log
+# Kernel.org's own web key directory first (it timed out from the CI network once),
+# then public key servers, by FINGERPRINT.
+timeout 60 gpg --batch --quiet --auto-key-locate wkd --locate-keys torvalds@kernel.org gregkh@kernel.org >> gpg-keys.log 2>&1 || true
+for server in hkps://keys.openpgp.org hkps://keyserver.ubuntu.com; do
+  for fpr in $ALLOWED; do
+    gpg --batch --list-keys "$fpr" > /dev/null 2>&1 \
+      || timeout 60 gpg --batch --keyserver "$server" --recv-keys "$fpr" >> gpg-keys.log 2>&1 || true
+  done
+done
+if gpg --batch --status-fd 1 --verify sha256sums.asc > gpg-verify.log 2> gpg-verify.err; then
+  SIGNER=$(awk '/VALIDSIG/ {print $NF}' gpg-verify.log | head -n 1)
+  case " $ALLOWED " in
+    *" $SIGNER "*) SIG="verified: good signature by key $SIGNER" ;;
+    *) warn "kernel source signature by an unexpected key" "signer $SIGNER is not one of: $ALLOWED" ; SIG="NOT verified" ;;
+  esac
 fi
+cat gpg-verify.err >> gpg-keys.log 2> /dev/null || true
 if [ "$SIG" = "NOT verified" ] && [ "${ALLOW_UNVERIFIED:-0}" != 1 ]; then
   warn "kernel source signature could not be verified" "$(tail -n 6 gpg-keys.log; tail -n 6 gpg-verify.log 2> /dev/null)"
   exit 1
