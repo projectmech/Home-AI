@@ -101,6 +101,9 @@ if [ -n "$missing" ]; then
   warn "kernel configuration: REQUIRED options are missing" "$missing"
   exit 1
 fi
+# "make kernelrelease" reads CONFIG_LOCALVERSION from include/config/auto.conf, which only
+# exists after syncconfig; without it the name would lack the "-jarvis-amd64" suffix.
+make syncconfig > /dev/null
 make -s kernelrelease > "$WORK/release.txt"
 REL=$(cat "$WORK/release.txt")
 case "$REL" in *-jarvis-amd64) ;; *) warn "kernel build" "unexpected release '$REL' (must end in -jarvis-amd64)"; exit 1 ;; esac
