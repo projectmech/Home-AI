@@ -24,3 +24,4 @@ efibootmgr
 plymouth
 plymouth-label
 fonts-dejavu-core
+xkb-data

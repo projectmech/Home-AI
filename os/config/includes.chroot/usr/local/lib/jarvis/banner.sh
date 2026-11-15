@@ -35,6 +35,7 @@ dmesg 2>/dev/null | grep -iE 'simpledrm|efifb|fb0|plymouth|framebuffer|drm' | he
 if [ -r /var/log/plymouth-debug.log ]; then
   dbg "plog: lines=$(wc -l < /var/log/plymouth-debug.log)"
   grep -iE 'script|jarvis|png|image' /var/log/plymouth-debug.log | grep -vE 'ThemeDir|plymouthd.defaults' | head -n 12 | while IFS= read -r l; do dbg "plog-script: $(printf '%s' "$l" | cut -c1-230)"; done
+  grep -iE 'device-manager|renderer|fb0|serial|ignore|splash plugin|falling|xkb|keyboard' /var/log/plymouth-debug.log | grep -vE 'ThemeDir|plymouthd.defaults' | head -n 14 | while IFS= read -r l; do dbg "plog-script: $(printf '%s' "$l" | cut -c1-230)"; done
   tail -n 22 /var/log/plymouth-debug.log | while IFS= read -r l; do dbg "plog-tail: $(printf '%s' "$l" | cut -c1-230)"; done
 fi
 journalctl -b -u plymouth-start.service --no-pager 2>/dev/null | tail -n 4 | while IFS= read -r l; do dbg "plog: unit: $l"; done

@@ -240,9 +240,12 @@ if [ "$AUTO" = 1 ]; then CONSOLE="console=tty0 console=ttyS0,115200n8"; else CON
 # Real installs start with the JARVIS orb boot screen (the disk-unlock prompt is
 # then drawn by it). The unattended test install stays plain text unless the
 # test asks for the splash, so the serial-console tests keep working.
-SPLASH_ARGS="quiet splash"
+# plymouth.ignore-serial-consoles: with a serial console on the command line Plymouth
+# otherwise falls back to a text splash (run 33: the details plugin drew the unlock
+# prompt on the serial console and the screen stayed blank).
+SPLASH_ARGS="quiet splash plymouth.ignore-serial-consoles"
 if [ "$AUTO" = 1 ]; then
-  if [ "$(cmdline_value jarvis.install.splash)" = "1" ]; then SPLASH_ARGS="splash plymouth.debug"; else SPLASH_ARGS="plymouth.enable=0"; fi
+  if [ "$(cmdline_value jarvis.install.splash)" = "1" ]; then SPLASH_ARGS="splash plymouth.ignore-serial-consoles plymouth.debug"; else SPLASH_ARGS="plymouth.enable=0"; fi
 fi
 cat > "$TARGET/etc/default/grub" <<EOF
 GRUB_DEFAULT=0

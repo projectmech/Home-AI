@@ -125,6 +125,7 @@ jobs:
           need 'plymouth/themes/jarvis/jarvis\.script$' 'JARVIS boot theme script'
           need 'plymouth/themes/jarvis/inner-right\.png$' 'boot theme mark shapes'
           need 'fonts/truetype/dejavu/DejaVuSans\.ttf$' 'font for boot screen text'
+          need 'usr/share/X11/xkb/rules/evdev$' 'keyboard layout data (the boot screen prompt reads keys through it)'
           forbid '(sbin|bin)/sshd$' 'SSH server'
           forbid 'usr/bin/sudo$' 'sudo'
           forbid 'etc/sudoers\.d/jarvis-admin' 'sudoers entry for jarvis-admin'
