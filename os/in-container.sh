@@ -77,7 +77,10 @@ ISO=$(ls /build/lb/*.iso | head -n 1)
 # NVIDIA forcedeth, is also kept: harmless.) Fail the build if tg3 is missing.
 echo "network drivers present in the image:"
 find /build/lb/chroot -path '*/drivers/net/ethernet/*' \( -name 'forcedeth.ko*' -o -name 'tg3.ko*' -o -name 'r8169.ko*' -o -name 'e1000e.ko*' -o -name 'igb.ko*' \) -printf '  %f\n' | sort -u
-find /build/lb/chroot -name 'tg3.ko*' | grep -q . \
+# tg3 is a module in Debian's kernel and built in to the JARVIS kernel (CONFIG_TIGON3=y).
+TG3_FILE=$(find /build/lb/chroot -name 'tg3.ko*' | head -n 1)
+TG3_BUILTIN=$(grep -l '^CONFIG_TIGON3=y' /build/lb/chroot/boot/config-* 2> /dev/null | head -n 1 || true)
+[ -n "$TG3_FILE" ] || [ -n "$TG3_BUILTIN" ] \
   || { echo "ERROR: tg3 (the Mac mini 5,1's Ethernet driver) is not in the image" >&2; exit 1; }
 
 # ---- start by itself: boot the default entry after 5 seconds ------------------

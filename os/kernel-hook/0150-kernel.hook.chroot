@@ -1,0 +1,33 @@
+#!/bin/sh
+# Only added to the image when it is built with --kernel-debs (os/build.sh).
+# The JARVIS kernel packages were installed with the others; this removes Debian's
+# kernel so the image carries exactly one kernel, then rebuilds that kernel's
+# initramfs now that the boot screen theme (hook 0100) and everything else is in place.
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+JK=$(ls /boot/vmlinuz-*-jarvis-amd64 2> /dev/null | head -n 1)
+[ -n "$JK" ] || { echo "ERROR: the JARVIS kernel is not installed in the image" >&2; exit 1; }
+JREL=${JK#/boot/vmlinuz-}
+echo "kernel hook: keeping $JREL"
+
+DEBIAN_KERNELS=$(dpkg-query -W -f='${Package}\n' 'linux-image-*' 2> /dev/null | grep -v -- '-jarvis-amd64' || true)
+if [ -n "$DEBIAN_KERNELS" ]; then
+  echo "kernel hook: removing $DEBIAN_KERNELS"
+  # shellcheck disable=SC2086
+  apt-get purge -y $DEBIAN_KERNELS
+  apt-get autoremove -y --purge || true
+fi
+# Leftovers of Debian's kernel (modules directory, initramfs, config) if the packages left any.
+for d in /lib/modules/*; do
+  [ "$(basename "$d")" = "$JREL" ] || rm -rf "$d"
+done
+for f in /boot/vmlinuz-* /boot/initrd.img-* /boot/config-* /boot/System.map-*; do
+  [ -e "$f" ] || continue
+  case "$f" in *"$JREL"*) ;; *) rm -f "$f" ;; esac
+done
+
+update-initramfs -c -k "$JREL" || update-initramfs -u -k "$JREL"
+mkdir -p /usr/share/jarvis
+echo "$JREL" > /usr/share/jarvis/custom-kernel
+ls -l /boot

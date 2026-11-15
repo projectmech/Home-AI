@@ -22,12 +22,16 @@ REPO=$(dirname "$OSDIR")
 BUNDLE=""
 OUT="$REPO/out"
 SELFTEST=0
+# --kernel-debs DIR: use the JARVIS kernel packages built by kernel/build.sh instead
+# of Debian's kernel (docs/KERNEL.md).
+KERNEL_DEBS=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --bundle) BUNDLE=${2:-}; shift 2 ;;
     --out) OUT=${2:-}; shift 2 ;;
     --selftest) SELFTEST=1; shift ;;
+    --kernel-debs) KERNEL_DEBS=${2:-}; shift 2 ;;
     -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -63,6 +67,16 @@ install -D -m 0644 "$ROOT/VERSION" "$INC/opt/home-ai/VERSION"
 install -D -m 0644 "$REPO/packaging/home-ai.service" "$INC/etc/systemd/system/home-ai.service"
 rm -rf "$WORK/unpack"
 log "JARVIS core $(cat "$INC/opt/home-ai/VERSION") staged"
+
+if [ -n "$KERNEL_DEBS" ]; then
+  KERNEL_DEBS=$(readlink -f "$KERNEL_DEBS")
+  ls "$KERNEL_DEBS"/linux-image-*-jarvis-amd64_*.deb > /dev/null 2>&1 || die "no JARVIS kernel image package in $KERNEL_DEBS"
+  mkdir -p "$WORK/config/packages.chroot" "$WORK/config/hooks/live"
+  cp "$KERNEL_DEBS"/linux-image-*.deb "$KERNEL_DEBS"/linux-headers-*.deb "$WORK/config/packages.chroot/"
+  # Runs after the packages are installed: removes Debian's kernel, rebuilds the initramfs.
+  install -m 0755 "$OSDIR/kernel-hook/0150-kernel.hook.chroot" "$WORK/config/hooks/live/0150-kernel.hook.chroot"
+  log "JARVIS kernel $(cat "$KERNEL_DEBS/RELEASE" 2> /dev/null || echo '?') staged"
+fi
 
 # ---- build ------------------------------------------------------------------
 step "Building the image in a debian:trixie container (this takes several minutes)"

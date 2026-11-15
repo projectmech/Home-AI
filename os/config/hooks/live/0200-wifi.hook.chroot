@@ -15,7 +15,12 @@ KVER=$(ls /lib/modules | sort -V | tail -n 1)
 echo "wifi hook: building wl for kernel $KVER"
 LOG=/tmp/wifi-build.log
 : > "$LOG"
-apt-get install -y --no-install-recommends dkms linux-headers-amd64 gcc make libc6-dev broadcom-sta-dkms >> "$LOG" 2>&1
+if [ -f /usr/share/jarvis/custom-kernel ]; then
+  # The JARVIS kernel's own headers package is already installed; Debian's would not match it.
+  apt-get install -y --no-install-recommends dkms gcc make libc6-dev broadcom-sta-dkms >> "$LOG" 2>&1
+else
+  apt-get install -y --no-install-recommends dkms linux-headers-amd64 gcc make libc6-dev broadcom-sta-dkms >> "$LOG" 2>&1
+fi
 dkms autoinstall -k "$KVER" >> "$LOG" 2>&1
 
 WL=$(find "/lib/modules/$KVER" -name 'wl.ko*' | head -n 1)

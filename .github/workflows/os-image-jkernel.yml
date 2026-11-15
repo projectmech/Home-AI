@@ -1,0 +1,179 @@
+name: OS image (JARVIS kernel)
+
+# The same OS image as os-image.yml, but with the JARVIS kernel (kernel/, docs/KERNEL.md)
+# instead of Debian's, built from the kernel packages of the newest successful Kernel
+# run. It is kept apart from os-image.yml so a kernel problem cannot break the image
+# that already works. It runs the same checks that matter for a kernel: what is in the
+# image, the BIOS and EFI boot tests, and the encrypted installs, including the boot
+# screen (splash) install.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Kernel]
+    types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - os/**
+      - .github/workflows/os-image-jkernel.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  image:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the newest signed release bundle and the newest kernel packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --limit 10 --json tagName,isDraft --jq '[.[] | select(.isDraft | not)][0].tagName')
+          echo "release: $TAG"
+          mkdir -p release
+          gh release download "$TAG" --dir release \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz' \
+            --pattern 'home-ai-*-linux-x86_64.tar.gz.sigstore.json'
+          RUN=$(gh run list --workflow kernel.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "kernel run: $RUN"
+          [ -n "$RUN" ] && [ "$RUN" != null ] || { echo "::error::no successful Kernel run to take packages from"; exit 1; }
+          gh run download "$RUN" --name jarvis-kernel-debs --dir kerneldebs
+          ls -l release kerneldebs
+
+      - name: Build the ISO with the JARVIS kernel
+        run: bash scripts/ci-run.sh os-build bash os/build.sh --bundle "$(ls release/home-ai-*-linux-x86_64.tar.gz)" --kernel-debs kerneldebs --out out
+
+      - name: Keep the ISO
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-os-jkernel-iso
+          path: |
+            out/jarvis-os-amd64.iso
+            out/jarvis-os-amd64.iso.sha256
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Inspect the finished ISO (kernel, drivers, boot screen)
+        run: |
+          sudo apt-get install -y --no-install-recommends squashfs-tools xorriso >/dev/null
+          mkdir -p inspect
+          xorriso -osirrox on -indev out/jarvis-os-amd64.iso -extract /live/filesystem.squashfs inspect/fs.squashfs >/dev/null 2>&1
+          unsquashfs -l inspect/fs.squashfs > inspect/files.txt
+          unsquashfs -cat inspect/fs.squashfs var/lib/dpkg/status > inspect/dpkg-status.txt
+          SIZE=$(stat -c %s out/jarvis-os-amd64.iso)
+          SHA=$(cut -d' ' -f1 out/jarvis-os-amd64.iso.sha256)
+          KERNELS=$(grep -oE 'lib/modules/[0-9][^/]*' inspect/files.txt | sort -u | tr '\n' ' ')
+          PKGS=$(grep -c '^Package:' inspect/dpkg-status.txt)
+          fail=0
+          : > inspect/report.txt
+          need()   { if grep -qE "$1" inspect/files.txt; then echo "present: $2" >> inspect/report.txt; else echo "MISSING: $2" >> inspect/report.txt; fail=1; fi; }
+          forbid() { if grep -qE "$1" inspect/files.txt; then echo "FORBIDDEN PRESENT: $2" >> inspect/report.txt; fail=1; else echo "absent: $2" >> inspect/report.txt; fi; }
+          need 'lib/modules/[0-9.]+-jarvis-amd64/' 'the JARVIS kernel modules'
+          forbid 'lib/modules/[0-9.]+\+deb[0-9]+-amd64/' "Debian's kernel modules"
+          need 'squashfs-root/boot/vmlinuz-[0-9.]+-jarvis-amd64' 'the JARVIS kernel image'
+          need 'squashfs-root/boot/initrd.img-[0-9.]+-jarvis-amd64' 'its initramfs'
+          need 'lib/modules/[0-9.]+-jarvis-amd64/extra/wl\.ko' 'Wi-Fi driver wl built for this kernel'
+          need 'lib/modules/[0-9.]+-jarvis-amd64/kernel/drivers/net/wireless/broadcom/b43/b43\.ko' 'in-tree b43 (alternative Wi-Fi driver)'
+          need 'lib/modules/[0-9.]+-jarvis-amd64/kernel/sound/pci/hda/snd-hda-intel\.ko' 'Intel HD audio'
+          need 'lib/modules/[0-9.]+-jarvis-amd64/kernel/drivers/hwmon/applesmc\.ko' 'Apple SMC sensors'
+          need 'squashfs-root/opt/home-ai/bin/home-ai$' 'JARVIS core'
+          need 'usr/local/sbin/jarvis-setup$' 'guided setup'
+          need 'usr/local/sbin/jarvis-install$' 'installer'
+          need 'usr/local/bin/llama-server$' 'model server'
+          need '(sbin|bin)/plymouthd$' 'Plymouth (boot screen)'
+          need 'plymouth/script\.so$' 'Plymouth script module'
+          need 'usr/share/plymouth/themes/jarvis/jarvis\.script$' 'JARVIS boot theme'
+          forbid '(sbin|bin)/sshd$' 'SSH server'
+          {
+            echo '### Finished ISO (JARVIS kernel)'
+            echo "- size: $SIZE bytes"; echo "- sha256: $SHA"; echo "- kernels in the image: $KERNELS"; echo "- installed packages: $PKGS"
+            echo '```'; cat inspect/report.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          MSG=$( { echo "size=$SIZE sha256=$SHA kernels=$KERNELS packages=$PKGS"; cat inspect/report.txt; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          if [ "$fail" = 0 ]; then echo "::warning title=JARVIS-kernel ISO inspection: all required present::$MSG"; else echo "::error title=JARVIS-kernel ISO inspection FAILED::$MSG"; fi
+          unsquashfs -cat inspect/fs.squashfs usr/share/jarvis/wifi-driver.txt > inspect/wifi.txt 2> /dev/null || echo "wifi-driver.txt is missing" > inspect/wifi.txt
+          WMSG=$(sed 's/%/%25/g' inspect/wifi.txt | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=Wi-Fi driver (built for the JARVIS kernel)::$WMSG"
+          exit "$fail"
+
+      - name: Install QEMU and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf socat
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Boot test, BIOS
+        id: bios
+        continue-on-error: true
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso bios 300
+
+      - name: Boot test, EFI
+        id: efi
+        continue-on-error: true
+        run: bash os/test-boot.sh out/jarvis-os-amd64.iso efi 300
+
+      - name: Fail the job if a boot test failed
+        if: steps.bios.outcome == 'failure' || steps.efi.outcome == 'failure'
+        run: |
+          echo "BIOS: ${{ steps.bios.outcome }}  EFI: ${{ steps.efi.outcome }}"
+          exit 1
+
+      - name: Keep the serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jkernel-boot-logs
+          path: |
+            serial-*.log
+            screen-*.ppm
+          if-no-files-found: ignore
+          retention-days: 14
+
+  install:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: bios
+            unlock: pass
+          - mode: efi
+            unlock: recovery
+          - mode: efi
+            unlock: pass
+            splash: splash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: jarvis-os-jkernel-iso
+          path: out
+      - name: Install QEMU and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf socat xorriso
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+      - name: Install test (${{ matrix.mode }}, unlock with ${{ matrix.unlock }} ${{ matrix.splash }})
+        run: bash os/test-install.sh out/jarvis-os-amd64.iso ${{ matrix.mode }} ${{ matrix.unlock }} ${{ matrix.splash }}
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jkernel-install-logs-${{ matrix.mode }}-${{ matrix.unlock }}${{ matrix.splash && '-splash' || '' }}
+          path: |
+            install-*.log
+            install-*.ppm
+          if-no-files-found: ignore
+          retention-days: 14
