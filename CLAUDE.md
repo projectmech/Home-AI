@@ -1,5 +1,7 @@
 # Claude Code instructions — Home AI
 
+NOTE (2026-11-15): the real machine was measured by JARVIS Probe: a mid-2011 Mac mini 5,1 with a Core i5-2415M (Sandy Bridge, AVX, 4 threads), 16 GB RAM, a worn 500 GB 5400 rpm hard disk, Broadcom Ethernet (tg3) and Wi-Fi (BCM4331). See docs/HARDWARE.md. The Core 2 baseline below still works but is no longer a requirement.
+
 Build an independent, self-hosted JARVIS-like home assistant with a **custom Rust core** and an authenticated Svelte/TypeScript web UI. The target device is a **2010 Mac mini, Core 2 Duo, 16 GB DDR3, 256 GB drive of unknown type**. Primary OS candidate: Debian 13 minimal, subject to successful hardware/boot verification.
 
 ## First read

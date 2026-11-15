@@ -154,6 +154,8 @@ redact() {
   sed -E \
     -e 's/(Serial Number|Serial number|SerialNumber|Asset Tag|Service Tag|UUID|serial)([: =]+)[^[:space:]].*/\1\2<redacted>/' \
     -e 's/(UUID|PARTUUID|PTUUID)="[^"]*"/\1="<redacted>"/g' \
+    -e 's/(GPT,)[0-9A-Fa-f-]{36}/\1<redacted>/g' \
+    -e 's/(LU WWN Device Id|Logical Unit WWN Device Identifier|Unique ID|Disk identifier)([: =]+)[^[:space:]].*/\1\2<redacted>/' \
     -e 's/(([0-9A-Fa-f]{2}:){3})([0-9A-Fa-f]{2}:){2}[0-9A-Fa-f]{2}/\1xx:xx:xx/g'
 }
 
