@@ -1,0 +1,8 @@
+#!/bin/sh
+# The guided setup (jarvis-setup) needs these; fail the build loudly if one is missing.
+set -e
+chmod 0755 /usr/local/sbin/jarvis-setup
+for t in whiptail loadkeys sudo iw rfkill; do
+  command -v "$t" > /dev/null || { echo "ERROR: $t is not in the image (the guided setup needs it)" >&2; exit 1; }
+done
+getent group sudo > /dev/null || { echo "ERROR: the sudo group does not exist" >&2; exit 1; }

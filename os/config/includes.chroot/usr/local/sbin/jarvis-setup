@@ -1,0 +1,359 @@
+#!/bin/bash
+# JARVIS OS setup: a short guided installer, one screen at a time.
+#
+#   1 Keyboard   2 Network (cable or Wi-Fi)   3 Disk   4 Your account   5 Review
+#
+# Nothing on this computer is changed until the last screen, where you confirm by
+# typing ERASE. Back goes to the previous screen. The actual installation is done
+# by jarvis-install (this program only asks the questions).
+set -u
+export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export TERM=${TERM:-linux}
+# Cyan on black, like the boot screen.
+export NEWT_COLORS='root=,black window=,black border=cyan,black title=cyan,black shadow=,black
+button=black,cyan actbutton=black,white compactbutton=cyan,black checkbox=cyan,black actcheckbox=black,cyan
+entry=cyan,black label=cyan,black listbox=cyan,black actlistbox=black,cyan sellistbox=black,cyan
+actsellistbox=black,cyan textbox=cyan,black acttextbox=black,cyan helpline=cyan,black roottext=cyan,black
+emptyscale=,black fullscale=,cyan disentry=gray,black'
+
+BT="JARVIS OS setup"
+ANSWERS=/run/jarvis-setup/answers
+
+# whiptail prints its answer on stderr; capture it on stdout.
+T() { whiptail --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+msg() { whiptail --backtitle "$BT" --title "${2:-JARVIS OS}" --msgbox "$1" "${3:-12}" 70; }
+
+KBD=us XKB=us KEYCODE=us
+NETMODE=skip NETINFO="not set up now"
+DISK="" DISKINFO="" ROOT_GB=""
+USERNAME="" USERPASS="" HOSTNAME_NEW=jarvis
+PASS="" RECOVERY=""
+
+machine() {
+  local m c r
+  m="$(cat /sys/class/dmi/id/product_name 2>/dev/null) $(cat /sys/class/dmi/id/product_version 2>/dev/null)"
+  c=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//; s/(R)//g; s/(TM)//g; s/CPU //')
+  r=$(free -m | awk '/^Mem:/ {printf "%d GB", ($2 + 512) / 1024}')
+  printf '%s, %s, %s memory' "$m" "$c" "$r"
+}
+
+# ---- 0 welcome --------------------------------------------------------------------
+welcome() {
+  local mode=BIOS
+  [ -d /sys/firmware/efi ] && mode=UEFI
+  whiptail --backtitle "$BT" --title "Welcome to JARVIS OS" --yes-button "Start" --no-button "Quit" --yesno \
+"This sets up JARVIS OS on this computer in five short steps:
+
+  1  Keyboard
+  2  Network (cable or Wi-Fi)
+  3  Disk and partitions
+  4  Your account
+  5  Review and install
+
+Nothing on this computer is changed until the last screen, where you
+confirm. You can go Back at any time.
+
+This computer: $(machine)
+Started in $mode mode." 20 74
+  [ $? -eq 0 ] && return 0
+  return 2
+}
+
+# ---- 1 keyboard -------------------------------------------------------------------
+keyboard() {
+  local pick
+  pick=$(T --title "Step 1 of 5: Keyboard" --default-item "$KEYCODE" --ok-button "Next" --cancel-button "Back" \
+    --menu "Choose your keyboard layout. It is used for your password and the console." 20 64 10 \
+    us "US English" uk "British English" no "Norwegian" se "Swedish" dk "Danish" \
+    fi "Finnish" de "German" fr "French" es "Spanish" it "Italian") || return 1
+  KEYCODE=$pick
+  case "$pick" in
+    us) KBD=us; XKB=us ;;
+    uk) KBD=uk; XKB=gb ;;
+    no) KBD=no; XKB=no ;;
+    se) KBD=sv-latin1; XKB=se ;;
+    dk) KBD=dk; XKB=dk ;;
+    fi) KBD=fi; XKB=fi ;;
+    de) KBD=de; XKB=de ;;
+    fr) KBD=fr; XKB=fr ;;
+    es) KBD=es; XKB=es ;;
+    it) KBD=it; XKB=it ;;
+  esac
+  loadkeys "$KBD" > /dev/null 2>&1 || true
+  return 0
+}
+
+# ---- 2 network --------------------------------------------------------------------
+ipv4_of() { ip -4 -o addr show dev "$1" scope global 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4; exit}'; }
+wifi_if() {
+  local d n
+  for d in /sys/class/net/*; do
+    n=$(basename "$d")
+    case "$n" in wl* | wlan*) printf '%s' "$n"; return ;; esac
+  done
+}
+wired_ip() {
+  local d n ip
+  for d in /sys/class/net/e*; do
+    n=$(basename "$d")
+    ip=$(ipv4_of "$n")
+    [ -n "$ip" ] && { printf '%s' "$ip"; return; }
+  done
+}
+
+wifi_flow() {
+  local ifw list line ssid pw i n sig opt
+  ifw=$(wifi_if)
+  if [ -z "$ifw" ]; then
+    modprobe wl > /dev/null 2>&1 || true
+    sleep 2
+    ifw=$(wifi_if)
+  fi
+  if [ -z "$ifw" ]; then
+    msg "No Wi-Fi adapter was found.\n\nThe Mac mini's Wi-Fi chip (Broadcom BCM4331) needs a driver that is part of this installer. If you see this, the adapter did not start. You can use the Ethernet cable instead, or set Wi-Fi up later with: sudo jarvis-wifi connect <network>" "Wi-Fi" 14
+    return 1
+  fi
+  rfkill unblock wifi > /dev/null 2>&1 || true
+  ip link set "$ifw" up > /dev/null 2>&1 || true
+  while :; do
+    whiptail --backtitle "$BT" --title "Wi-Fi" --infobox "Looking for Wi-Fi networks..." 6 50
+    list=$(iw dev "$ifw" scan 2>/dev/null | awk '
+      /^BSS / { if (ssid != "") print sig "\t" ssid; ssid = ""; sig = -100 }
+      /signal:/ { sig = $2 }
+      /SSID:/ { sub(/^[ \t]*SSID: /, ""); ssid = $0 }
+      END { if (ssid != "") print sig "\t" ssid }' | sort -t"$(printf '\t')" -k1,1nr | awk -F'\t' 'length($2) > 0 && !seen[$2]++' | head -n 12)
+    local -a names=() menu=()
+    i=0
+    while IFS=$'\t' read -r sig ssid; do
+      [ -n "$ssid" ] || continue
+      names+=("$ssid")
+      i=$((i + 1))
+      menu+=("$i" "$ssid   (signal ${sig%.*} dBm)")
+    done <<< "$list"
+    menu+=("other" "A network that is not listed (type its name)")
+    menu+=("rescan" "Look again")
+    opt=$(T --title "Wi-Fi" --ok-button "Choose" --cancel-button "Back" \
+      --menu "Choose your Wi-Fi network." 20 70 12 "${menu[@]}") || return 1
+    case "$opt" in
+      rescan) continue ;;
+      other) ssid=$(T --title "Wi-Fi" --inputbox "Network name:" 8 60 "") || continue ;;
+      *) n=$((opt - 1)); ssid=${names[$n]} ;;
+    esac
+    [ -n "$ssid" ] || continue
+    pw=$(T --title "Wi-Fi: $ssid" --passwordbox "Password for \"$ssid\".\n(Leave empty for an open network.)" 10 64 "") || continue
+    whiptail --backtitle "$BT" --title "Wi-Fi" --infobox "Connecting to \"$ssid\"..." 6 60
+    JARVIS_WIFI_PASS="$pw" jarvis-wifi connect "$ssid" > /dev/null 2>&1 || true
+    local t=0 ip=""
+    while [ "$t" -lt 30 ]; do
+      ip=$(ipv4_of "$ifw")
+      [ -n "$ip" ] && break
+      sleep 1
+      t=$((t + 1))
+    done
+    if [ -n "$ip" ]; then
+      NETMODE=wifi
+      NETINFO="Wi-Fi \"$ssid\" ($ip)"
+      msg "Connected to \"$ssid\".\n\nThis computer's address: $ip" "Wi-Fi" 9
+      return 0
+    fi
+    msg "Could not connect to \"$ssid\".\n\nCheck the password and that the network is in range, then try again." "Wi-Fi" 10
+  done
+}
+
+network() {
+  local ip wlan wstate opt
+  while :; do
+    ip=$(wired_ip)
+    wlan=$(wifi_if)
+    if [ -n "$ip" ]; then wstate="connected ($ip)"; else wstate="not connected"; fi
+    opt=$(T --title "Step 2 of 5: Network" --ok-button "Next" --cancel-button "Back" \
+      --menu "A network lets JARVIS be reached from your other devices.\n\nCable: $wstate\nWi-Fi adapter: $([ -n "$wlan" ] && echo found || echo 'not started yet')" 20 70 4 \
+      wired "Use the Ethernet cable" \
+      wifi "Connect to a Wi-Fi network" \
+      skip "Set up the network later") || return 1
+    case "$opt" in
+      wired)
+        if [ -n "$ip" ]; then NETMODE=wired; NETINFO="cable ($ip)"; return 0; fi
+        msg "No cable connection was found.\n\nPlug the Ethernet cable into the router and wait a few seconds, then try again, or choose Wi-Fi." "Network" 10
+        ;;
+      wifi) wifi_flow && return 0 ;;
+      skip) NETMODE=skip; NETINFO="not set up now"; return 0 ;;
+    esac
+  done
+}
+
+# ---- 3 disk -----------------------------------------------------------------------
+disk() {
+  local live src name model rot kind size line d total
+  src=$(findmnt -no SOURCE /run/live/medium 2>/dev/null || true)
+  live=""
+  if [ -n "$src" ]; then
+    live=$(lsblk -no PKNAME "$src" 2>/dev/null | head -n 1)
+    [ -n "$live" ] || live=${src#/dev/}
+  fi
+  local -a menu=()
+  while read -r d; do
+    [ -n "$d" ] || continue
+    name=${d#/dev/}
+    model=$(tr -s ' ' < "/sys/block/$name/device/model" 2>/dev/null | sed 's/ *$//')
+    [ -n "$model" ] || model="unknown model"
+    rot=$(cat "/sys/block/$name/queue/rotational" 2>/dev/null || echo 1)
+    if [ "$rot" = 0 ]; then kind="SSD"; else kind="hard disk"; fi
+    size=$(lsblk -dno SIZE "$d")
+    menu+=("$d" "$size  $model  [$kind]")
+  done < <(lsblk -dnpb -o NAME,TYPE,RM,SIZE 2>/dev/null | awk -v live="/dev/$live" '$2 == "disk" && $3 == 0 && $1 != live && $4 >= 8589934592 {print $1}')
+  if [ "${#menu[@]}" -eq 0 ]; then
+    msg "No usable disk was found (an internal disk of at least 8 GB is needed)." "Disk" 8
+    return 2
+  fi
+  DISK=$(T --title "Step 3 of 5: Disk" --ok-button "Next" --cancel-button "Back" \
+    --menu "Choose the disk to install JARVIS OS on.\n\nEVERYTHING on the chosen disk will be erased." 18 76 6 "${menu[@]}") || return 1
+  local k
+  for ((k = 0; k < ${#menu[@]}; k += 2)); do [ "${menu[$k]}" = "$DISK" ] && DISKINFO=${menu[$((k + 1))]}; done
+  total=$(( $(lsblk -bdno SIZE "$DISK") / 1073741824 ))
+  line=$(lsblk -no NAME,SIZE,FSTYPE,LABEL "$DISK" | sed 's/^/  /')
+  whiptail --backtitle "$BT" --title "What is on $DISK now" --msgbox "This is on the disk at the moment. It will be erased.\n\n$line" 18 74
+  if [ "$(cat "/sys/block/${DISK#/dev/}/queue/rotational" 2>/dev/null)" = 1 ]; then
+    msg "Note: this is a spinning hard disk. JARVIS OS works on it, but a solid-state disk (SSD) would make everything much faster and last longer." "Disk" 9
+  fi
+  local lay
+  lay=$(T --title "Partitions" --ok-button "Next" --cancel-button "Back" \
+    --menu "How should the disk be divided?\n\nEither way JARVIS creates a small boot area and one encrypted system partition." 17 76 2 \
+    whole "Use the whole disk (recommended)" \
+    size "Choose how big the system partition is (the rest stays empty)") || return 1
+  ROOT_GB=""
+  if [ "$lay" = size ]; then
+    local max=$((total - 2)) gb
+    while :; do
+      gb=$(T --title "Partitions" --inputbox "System partition size in GB (between 16 and $max).\nThe rest of the $total GB disk is left empty." 10 64 "$max") || return 1
+      if [[ "$gb" =~ ^[0-9]+$ ]] && [ "$gb" -ge 16 ] && [ "$gb" -le "$max" ]; then ROOT_GB=$gb; break; fi
+      msg "Please enter a whole number between 16 and $max." "Partitions" 7
+    done
+  fi
+  return 0
+}
+
+# ---- 4 account (and the disk passphrase) -------------------------------------------
+account() {
+  local u h p1 p2 q
+  while :; do
+    u=$(T --title "Step 4 of 5: Your account" --ok-button "Next" --cancel-button "Back" \
+      --inputbox "Choose a user name for this computer.\n(Lowercase letters and digits, starting with a letter.)" 10 64 "$USERNAME") || return 1
+    if ! [[ "$u" =~ ^[a-z][a-z0-9_-]{1,30}$ ]]; then msg "That user name is not allowed. Use 2 to 31 lowercase letters, digits, - or _, starting with a letter." "User name" 8; continue; fi
+    case "$u" in root | daemon | bin | sys | sync | games | man | lp | mail | news | uucp | proxy | www-data | backup | list | irc | nobody | home-ai | systemd-*)
+      msg "\"$u\" is reserved by the system. Choose another name." "User name" 7; continue ;; esac
+    USERNAME=$u
+    break
+  done
+  while :; do
+    h=$(T --title "Computer name" --inputbox "A name for this computer on your network:" 9 64 "$HOSTNAME_NEW") || continue
+    if [[ "$h" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]]; then HOSTNAME_NEW=$h; break; fi
+    msg "Use lowercase letters, digits and - only (for example: jarvis)." "Computer name" 7
+  done
+  while :; do
+    p1=$(T --title "Password for $USERNAME" --passwordbox "Choose a password (at least 8 characters):" 9 64 "") || return 1
+    p2=$(T --title "Password for $USERNAME" --passwordbox "Type it again:" 9 64 "") || return 1
+    if [ "${#p1}" -lt 8 ]; then msg "Too short: at least 8 characters." "Password" 7; continue; fi
+    if [ "$p1" != "$p2" ]; then msg "They do not match." "Password" 7; continue; fi
+    USERPASS=$p1
+    break
+  done
+  return 0
+}
+
+passphrase() {
+  local p1 p2
+  if whiptail --backtitle "$BT" --title "Step 4 of 5: Disk encryption" --yes-button "Same password" --no-button "A different one" --yesno \
+"The system partition is encrypted. A passphrase unlocks it every time the computer starts.
+
+Use the same password as your account (at least 12 characters), or choose a separate passphrase?
+
+Tip: the unlock screen at start-up may use a US keyboard layout. Letters and digits are safe on every layout; the recovery key you will see next always works." 17 74; then
+    if [ "${#USERPASS}" -ge 12 ]; then PASS=$USERPASS; return 0; fi
+    msg "Your account password is shorter than 12 characters, so it cannot also be the disk passphrase. Please choose a separate passphrase." "Disk encryption" 9
+  fi
+  while :; do
+    p1=$(T --title "Disk passphrase" --passwordbox "Passphrase for the encrypted disk (at least 12 characters):" 9 66 "") || return 1
+    p2=$(T --title "Disk passphrase" --passwordbox "Type it again:" 9 66 "") || return 1
+    if [ "${#p1}" -lt 12 ]; then msg "Too short: at least 12 characters." "Disk passphrase" 7; continue; fi
+    if [ "$p1" != "$p2" ]; then msg "They do not match." "Disk passphrase" 7; continue; fi
+    PASS=$p1
+    return 0
+  done
+}
+
+# ---- 5 review and the recovery key --------------------------------------------------
+summary() {
+  local sizetext ans
+  if [ -n "$ROOT_GB" ]; then sizetext="$ROOT_GB GB encrypted system partition (rest left empty)"; else sizetext="the rest of the disk as one encrypted system partition"; fi
+  whiptail --backtitle "$BT" --title "Step 5 of 5: Review" --scrolltext --yes-button "Continue" --no-button "Back" --yesno \
+"Please check these choices:
+
+  Keyboard:   $KEYCODE
+  Network:    $NETINFO
+  Disk:       $DISK  $DISKINFO
+  Layout:     512 MB boot area (EFI), 1 GB /boot, $sizetext
+  Account:    $USERNAME   (administrator; the root account is locked)
+  Computer:   $HOSTNAME_NEW
+  Encryption: yes (passphrase at start-up, plus a recovery key)
+
+On the next screens you get your recovery key, then the disk is erased." 20 78 || return 1
+  ans=$(T --title "Erase $DISK?" --ok-button "Install" --cancel-button "Back" \
+    --inputbox "EVERYTHING on $DISK will be erased. This cannot be undone.\n\nType  ERASE  (in capital letters) to continue:" 12 66 "") || return 1
+  [ "$ans" = ERASE ] && return 0
+  msg "Nothing was erased. (You must type ERASE exactly.)" "Cancelled" 7
+  return 1
+}
+
+recovery() {
+  local again
+  RECOVERY=$( { set +o pipefail; tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 32 | fold -w4 | paste -sd- -; } )
+  whiptail --backtitle "$BT" --title "Your recovery key" --msgbox \
+"Write this down on paper and keep it somewhere safe and separate:
+
+      $RECOVERY
+
+It unlocks the disk if you ever forget the passphrase. It is shown only now and is not stored on this computer in readable form. Anyone who has it can read your data." 16 70
+  while :; do
+    again=$(T --title "Your recovery key" --inputbox "Type the recovery key again to prove you have it:" 9 70 "") || { msg "The key is needed before installing." "Recovery key" 7; continue; }
+    [ "$again" = "$RECOVERY" ] && return 0
+    msg "That is not the same. Check what you wrote down." "Recovery key" 7
+  done
+}
+
+quit_setup() {
+  if whiptail --backtitle "$BT" --title "Quit setup" --yesno "Quit the setup? Nothing has been changed." 8 50; then
+    clear
+    echo "Setup was cancelled. Nothing was changed. Run: sudo jarvis-install   to start again."
+    exit 0
+  fi
+}
+
+STEPS=(welcome keyboard network disk account passphrase summary recovery)
+i=0
+while [ "$i" -lt "${#STEPS[@]}" ]; do
+  "${STEPS[$i]}"
+  rc=$?
+  case "$rc" in
+    0) i=$((i + 1)) ;;
+    1) [ "$i" -gt 0 ] && i=$((i - 1)) ;;
+    *) quit_setup ;;
+  esac
+done
+
+# ---- hand over to the installer -----------------------------------------------------
+install -d -m 700 /run/jarvis-setup
+umask 077
+{
+  printf 'DISK=%q\n' "$DISK"
+  printf 'ROOT_GB=%q\n' "$ROOT_GB"
+  printf 'PASS=%q\n' "$PASS"
+  printf 'RECOVERY=%q\n' "$RECOVERY"
+  printf 'USERNAME=%q\n' "$USERNAME"
+  printf 'USERPASS=%q\n' "$USERPASS"
+  printf 'HOSTNAME_NEW=%q\n' "$HOSTNAME_NEW"
+  printf 'KEYMAP_KBD=%q\n' "$KBD"
+  printf 'KEYMAP_XKB=%q\n' "$XKB"
+} > "$ANSWERS"
+clear
+JARVIS_WIZARD=1 JARVIS_ANSWERS="$ANSWERS" exec /usr/local/sbin/jarvis-install

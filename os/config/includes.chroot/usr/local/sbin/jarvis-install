@@ -28,6 +28,26 @@ die()  { say "ERROR: $*"; return 1; }
 
 cmdline_value() { tr ' ' '\n' < /proc/cmdline | sed -n "s/^$1=//p" | head -n 1; }
 AUTO=0; [ "$(cmdline_value jarvis.install)" = "auto" ] && AUTO=1
+# WIZARD=1: the guided setup (jarvis-setup) already asked everything and wrote the
+# answers to a root-only file. Started from the boot menu without either, this
+# program just opens the guided setup.
+WIZARD=0; [ "${JARVIS_WIZARD:-0}" = 1 ] && WIZARD=1
+if [ "$AUTO" = 0 ] && [ "$WIZARD" = 0 ]; then exec /usr/local/sbin/jarvis-setup; fi
+# Answers that only the guided setup (or the automated test) provides.
+DISK=""; ROOT_GB=""; PASS=""; RECOVERY=""; USERNAME=""; USERPASS=""; HOSTNAME_NEW=jarvis
+KEYMAP_KBD=""; KEYMAP_XKB=""
+if [ "$WIZARD" = 1 ]; then
+  # shellcheck disable=SC1090
+  . "${JARVIS_ANSWERS:?no answers file}"
+fi
+if [ "$AUTO" = 1 ]; then
+  # Optional, so the test can exercise account creation, the host name and the keymap.
+  USERNAME=$(cmdline_value jarvis.install.user)
+  USERPASS=$(cmdline_value jarvis.install.userpass)
+  [ -z "$(cmdline_value jarvis.install.hostname)" ] || HOSTNAME_NEW=$(cmdline_value jarvis.install.hostname)
+  KEYMAP_KBD=$(cmdline_value jarvis.install.keymap)
+  KEYMAP_XKB=$KEYMAP_KBD
+fi
 
 TARGET=/target
 MAPNAME=jarvisroot
@@ -39,7 +59,7 @@ cleanup() {
   sync
   umount -R "$TARGET" 2>/dev/null
   cryptsetup close "$MAPNAME" 2>/dev/null
-  rm -rf "$WORK"
+  rm -rf "$WORK" /run/jarvis-setup
 }
 fail_trap() {
   rc=$?
@@ -84,9 +104,9 @@ describe() {
   printf '%s  %s  %s  [%s]' "$d" "$size" "$model" "$t"
 }
 
-if [ "$AUTO" = 1 ]; then
-  DISK=$(cmdline_value jarvis.install.disk)
-  [ -n "$DISK" ] || die "auto mode needs jarvis.install.disk"
+if [ "$AUTO" = 1 ] || [ "$WIZARD" = 1 ]; then
+  [ "$AUTO" = 0 ] || DISK=$(cmdline_value jarvis.install.disk)
+  [ -n "$DISK" ] || die "no disk was given"
   printf '%s\n' "${DISKS[@]}" | grep -qx "$DISK" || die "$DISK is not an allowed disk"
 else
   log ""
@@ -106,7 +126,9 @@ fi
 say "Target disk: $(describe "$DISK")"
 
 STEP="confirming"
-if [ "$AUTO" = 1 ]; then
+if [ "$WIZARD" = 1 ]; then
+  : # the setup screens already asked for the confirmation (the word ERASE)
+elif [ "$AUTO" = 1 ]; then
   [ "$(cmdline_value jarvis.install.erase)" = "ERASE-$DISK" ] || die "auto mode needs jarvis.install.erase=ERASE-$DISK"
 else
   log ""
@@ -118,7 +140,9 @@ fi
 # ---- passphrase and recovery key ----------------------------------------------
 STEP="passphrase"
 install -d -m 700 "$WORK"
-if [ "$AUTO" = 1 ]; then
+if [ "$WIZARD" = 1 ]; then
+  [ "${#PASS}" -ge 12 ] || die "the setup gave a passphrase shorter than 12 characters"
+elif [ "$AUTO" = 1 ]; then
   PASS=$(cmdline_value jarvis.install.pass)
   [ "${#PASS}" -ge 12 ] || die "auto mode needs jarvis.install.pass of at least 12 characters"
 else
@@ -133,13 +157,15 @@ else
     PASS=$P1; break
   done
 fi
-RECOVERY=$( { set +o pipefail; tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 32 | fold -w4 | paste -sd- -; } )
+[ -n "$RECOVERY" ] || RECOVERY=$( { set +o pipefail; tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' < /dev/urandom | head -c 32 | fold -w4 | paste -sd- -; } )
 [ "${#RECOVERY}" -eq 39 ] || die "could not generate a recovery key"
 umask 077
 printf '%s' "$PASS" > "$WORK/pass"
 printf '%s' "$RECOVERY" > "$WORK/recovery"
 
-if [ "$AUTO" = 0 ]; then
+if [ "$WIZARD" = 1 ]; then
+  : # the setup screens already showed the recovery key and checked it
+elif [ "$AUTO" = 0 ]; then
   log ""
   log "RECOVERY KEY (shown once, never stored on this computer):"
   log ""
@@ -160,16 +186,23 @@ STEP="partitioning"
 say "Partitioning $DISK"
 for p in $(lsblk -lnpo NAME "$DISK" | tail -n +2); do umount "$p" 2>/dev/null || true; done
 wipefs -af "$DISK" >/dev/null
+# The encrypted system partition takes the rest of the disk, or ROOT_GB gigabytes
+# of it when the person chose a size in the setup.
+ROOTEND_EFI=100%; ROOTEND_BIOS=100%
+if [ -n "$ROOT_GB" ]; then
+  ROOTEND_EFI="$((1537 + ROOT_GB * 1024))MiB"
+  ROOTEND_BIOS="$((1025 + ROOT_GB * 1024))MiB"
+fi
 if [ "$BOOTMODE" = efi ]; then
   parted -s "$DISK" mklabel gpt \
     mkpart ESP fat32 1MiB 513MiB set 1 esp on \
     mkpart boot ext4 513MiB 1537MiB \
-    mkpart cryptroot 1537MiB 100%
+    mkpart cryptroot 1537MiB "$ROOTEND_EFI"
   ESPP=$(part 1); BOOTP=$(part 2); ROOTP=$(part 3)
 else
   parted -s "$DISK" mklabel msdos \
     mkpart primary ext4 1MiB 1025MiB set 1 boot on \
-    mkpart primary 1025MiB 100%
+    mkpart primary 1025MiB "$ROOTEND_BIOS"
   ESPP=""; BOOTP=$(part 1); ROOTP=$(part 2)
 fi
 udevadm settle --timeout=30 || true
@@ -232,8 +265,13 @@ BOOT_UUID=$(blkid -s UUID -o value "$BOOTP")
   [ -z "$ESPP" ] || echo "UUID=$(blkid -s UUID -o value "$ESPP") /boot/efi vfat umask=0077 0 1"
 } > "$TARGET/etc/fstab"
 echo "$MAPNAME UUID=$ROOT_UUID none luks" > "$TARGET/etc/crypttab"
-echo jarvis > "$TARGET/etc/hostname"
-printf '127.0.0.1 localhost\n127.0.1.1 jarvis\n' > "$TARGET/etc/hosts"
+echo "$HOSTNAME_NEW" > "$TARGET/etc/hostname"
+printf '127.0.0.1 localhost\n127.0.1.1 %s\n' "$HOSTNAME_NEW" > "$TARGET/etc/hosts"
+if [ -n "$KEYMAP_KBD" ]; then
+  # Console keyboard layout (systemd-vconsole-setup) and the XKB layout (the boot screen and anything else that reads it).
+  echo "KEYMAP=$KEYMAP_KBD" > "$TARGET/etc/vconsole.conf"
+  printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' "$KEYMAP_XKB" > "$TARGET/etc/default/keyboard"
+fi
 echo "RESUME=none" > "$TARGET/etc/initramfs-tools/conf.d/resume"
 
 if [ "$AUTO" = 1 ]; then CONSOLE="console=tty0 console=ttyS0,115200n8"; else CONSOLE="console=ttyS0,115200n8 console=tty0"; fi
@@ -260,6 +298,29 @@ GRUB_DISABLE_OS_PROBER=true
 EOF
 
 for m in dev proc sys run; do mount --rbind "/$m" "$TARGET/$m"; mount --make-rslave "$TARGET/$m"; done
+
+if [ -n "$USERNAME" ]; then
+  STEP="creating the account"
+  say "Creating the account $USERNAME"
+  chroot "$TARGET" useradd -m -s /bin/bash "$USERNAME"
+  for g in sudo adm audio video netdev; do
+    chroot "$TARGET" getent group "$g" >/dev/null 2>&1 && chroot "$TARGET" usermod -aG "$g" "$USERNAME" || true
+  done
+  [ -n "$USERPASS" ] || die "no password was given for $USERNAME"
+  printf '%s:%s\n' "$USERNAME" "$USERPASS" | chroot "$TARGET" chpasswd
+  # The root account stays locked: administration is done as this user with sudo.
+  chroot "$TARGET" passwd -l root >/dev/null
+fi
+
+# Keep the Wi-Fi network joined during setup (the saved key only, never the password).
+for conf in /etc/wpa_supplicant/wpa_supplicant-wl*.conf /etc/wpa_supplicant/wpa_supplicant-wlan*.conf; do
+  [ -f "$conf" ] || continue
+  wif=$(basename "$conf" .conf); wif=${wif#wpa_supplicant-}
+  install -d -m 0755 "$TARGET/etc/wpa_supplicant"
+  install -m 0600 "$conf" "$TARGET/etc/wpa_supplicant/$(basename "$conf")"
+  chroot "$TARGET" systemctl enable "wpa_supplicant@$wif.service" >/dev/null 2>&1 || true
+  say "Kept the Wi-Fi network for $wif"
+done
 
 STEP="removing live-only packages"
 chroot "$TARGET" /bin/bash -c '
@@ -295,6 +356,13 @@ ROOTUUID=$(blkid -s UUID -o value "/dev/mapper/$MAPNAME")
 grep -qE "root=(/dev/mapper/$MAPNAME|UUID=$ROOTUUID)( |$)" "$TARGET/boot/grub/grub.cfg" || die "grub.cfg does not point at the encrypted root"
 grep -q "^$MAPNAME " "$TARGET/etc/crypttab" || die "crypttab has no entry for the encrypted root"
 [ -x "$TARGET/opt/home-ai/bin/home-ai" ] || die "the JARVIS core is missing from the installed system"
+if [ -n "$USERNAME" ]; then
+  awk -F: -v u="$USERNAME" '$1 == u {found = 1} END {exit !found}' "$TARGET/etc/passwd" || die "the account $USERNAME was not created"
+  awk -F: -v u="$USERNAME" '$1 == u && $2 ~ /^[$]/ {ok = 1} END {exit !ok}' "$TARGET/etc/shadow" || die "the account $USERNAME has no password"
+  awk -F: '$1 == "root" && $2 ~ /^[!*]/ {ok = 1} END {exit !ok}' "$TARGET/etc/shadow" || die "the root account is not locked"
+  [ -d "$TARGET/home/$USERNAME" ] || die "the home directory of $USERNAME is missing"
+fi
+[ "$(cat "$TARGET/etc/hostname")" = "$HOSTNAME_NEW" ] || die "the computer name was not set"
 
 STEP="finishing"
 say "Finishing"
@@ -307,6 +375,7 @@ if [ "$AUTO" = 1 ]; then
 else
   log ""
   log "JARVIS OS is installed. Remove the installer USB stick, then restart."
+  [ -z "$USERNAME" ] || log "You can sign in on this computer as: $USERNAME"
   log "At start-up the computer asks for your passphrase. After that, the screen shows"
   log "the address and a setup token: open the address from another computer."
   ask "Press Enter to restart now. " >/dev/null

@@ -115,7 +115,7 @@ waitfor() { # <log> <pattern> <seconds> <description>
 echo "== A. installing onto an empty disk ($MODE)"
 xorriso -osirrox on -indev "$ISO" -extract /live/vmlinuz "$WORK/vmlinuz" -extract /live/initrd.img "$WORK/initrd.img" >/dev/null 2>&1
 CURLOG="install-$TAG-A.log"; : > "$CURLOG"
-APPEND="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=ttyS0,115200n8 jarvis.install=auto jarvis.install.disk=/dev/vda jarvis.install.erase=ERASE-/dev/vda jarvis.install.pass=$PASSPHRASE"
+APPEND="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=ttyS0,115200n8 jarvis.install=auto jarvis.install.disk=/dev/vda jarvis.install.erase=ERASE-/dev/vda jarvis.install.pass=$PASSPHRASE jarvis.install.user=tester jarvis.install.userpass=tester-password-1 jarvis.install.hostname=jarvis-test jarvis.install.keymap=us"
 [ -z "$SPLASH" ] || APPEND="$APPEND jarvis.install.splash=1"
 qemu-system-x86_64 "${COMMON[@]}" "${EFI[@]}" -serial "file:$CURLOG" \
   -kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" -append "$APPEND" \

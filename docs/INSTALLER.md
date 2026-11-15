@@ -58,3 +58,34 @@ unchanged, setup stays closed and the administrator can sign in.
 - Wi-Fi (not in the image), voice, AI, connectors, signed ISO, Tang.
 - A real install over the existing Ubuntu Server: destructive, needs explicit
   approval at the time, after the live image has been seen working on the Mac.
+
+## The guided setup screens (added 2026-11-15)
+Choosing **Install JARVIS OS** from the boot menu now opens a full-screen guided setup
+(`jarvis-setup`, built on whiptail, cyan on black like the boot screen) instead of plain
+prompts. One question per screen, **Back** always works, and nothing is changed until the
+last screen:
+
+1. **Keyboard**: US, British, Norwegian, Swedish, Danish, Finnish, German, French,
+   Spanish, Italian (applied at once, and saved for the installed system).
+2. **Network**: use the Ethernet cable, or **connect to Wi-Fi** (scans for networks,
+   asks for the password, connects, shows the address), or skip. A Wi-Fi network joined
+   here stays joined after installation (only the derived key is kept, never the password).
+3. **Disk**: lists the internal disks with size, model and SSD/hard-disk, shows what is on
+   the chosen disk now, warns about a spinning disk, then **partitions**: the whole disk
+   (recommended) or a system partition of a size you choose (the rest stays empty).
+   The layout is always a small EFI area, a 1 GB /boot, and one encrypted (LUKS2) system
+   partition.
+4. **Your account**: user name, computer name, password (8+ characters) and the disk
+   passphrase (12+ characters; the same as the password, or separate). The account is an
+   administrator (sudo); the root account is locked.
+5. **Review**, then type `ERASE`, then the one-time **recovery key** (write it down, type it
+   back), then the installation runs.
+
+`jarvis-install` still does the work and still refuses to touch a disk without the typed
+confirmation. The automated test mode (`jarvis.install=auto`) now also takes
+`jarvis.install.user`, `.userpass`, `.hostname` and `.keymap`, so CI proves the account is
+created with a password, root is locked, the computer name is set and the home directory
+exists. **Not proven:** the screens themselves have been checked by reading, not by a
+person using them; the first run on the real machine will show what needs polishing.
+Known limit: the disk-unlock prompt at start-up may use a US keyboard layout, which is why
+the setup advises letters and digits and always offers the recovery key.

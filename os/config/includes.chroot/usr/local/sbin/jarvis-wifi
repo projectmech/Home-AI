@@ -39,8 +39,12 @@ case "${1:-status}" in
     need_root connect
     SSID=${2:-}
     [ -n "$SSID" ] || { echo "usage: jarvis-wifi connect SSID" >&2; exit 2; }
-    read -r -s -p "Password for $SSID (leave empty for an open network): " PASS
-    echo
+    if [ -n "${JARVIS_WIFI_PASS+x}" ]; then
+      PASS=$JARVIS_WIFI_PASS   # given by the setup wizard (not read from the keyboard)
+    else
+      read -r -s -p "Password for $SSID (leave empty for an open network): " PASS
+      echo
+    fi
     CONF="/etc/wpa_supplicant/wpa_supplicant-$IF.conf"
     umask 077
     {

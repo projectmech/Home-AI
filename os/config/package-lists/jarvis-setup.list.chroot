@@ -1,0 +1,4 @@
+# Guided setup screens (whiptail), keyboard layouts (kbd) and the account you create (sudo).
+whiptail
+kbd
+sudo
