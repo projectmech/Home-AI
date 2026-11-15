@@ -1,0 +1,17 @@
+[Unit]
+Description=JARVIS Probe: collect hardware information (read-only)
+After=network.target systemd-networkd.service
+Wants=systemd-networkd.service
+# tty1 shows the probe's summary, not a login prompt (Alt+F2 has a shell).
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/jarvis-probe
+StandardInput=null
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

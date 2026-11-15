@@ -1,0 +1,232 @@
+#!/bin/bash
+# JARVIS Probe: collect hardware information from this computer, READ-ONLY.
+#
+# Nothing is written to any disk of this computer and nothing leaves it unless
+# you fetch it: the report is shown on the screen, served on your local network
+# at http://<this-address>:8080/report.txt for 20 minutes, and copied to a USB
+# stick whose label is REPORT if one is plugged in.
+#
+# Serial numbers, UUIDs and the last half of every MAC address are replaced with
+# <redacted> / xx by default. `jarvis-probe --full` keeps them (for your own use).
+set -u
+
+OUT=/run/probe
+WWW=$OUT/www
+RAW=$OUT/raw.txt
+REPORT=$WWW/report.txt
+DMESG=$WWW/dmesg.txt
+FULL=0
+[ "${1:-}" = "--full" ] && FULL=1
+mkdir -p "$WWW"
+
+# Kernel log lines reach every console, including the serial port, and CI reads them.
+sysctl -q -w kernel.printk_devkmsg=on 2> /dev/null || true
+kmsg() { printf 'jarvis-probe: %s\n' "$*" > /dev/kmsg 2> /dev/null || true; }
+kmsg "started"
+
+section() { printf '\n== %s ==\n' "$1"; }
+run() { # a command, with a time limit; whatever it prints goes into the report
+  printf '\n$ %s\n' "$*"
+  timeout 25 "$@" 2>&1 || printf '(exit status %s)\n' "$?"
+}
+
+ipv4() { ip -4 -o addr show scope global 2> /dev/null | awk '{sub(/\/.*/, "", $4); print $4; exit}'; }
+
+# Give DHCP a moment, but never wait for it long.
+i=0
+while [ "$i" -lt 25 ] && [ -z "$(ipv4)" ]; do
+  sleep 1
+  i=$((i + 1))
+done
+
+gather() {
+  section "Probe"
+  echo "JARVIS Probe 1   $(date -u '+%Y-%m-%d %H:%M:%S UTC') (the computer's clock may be wrong)"
+  echo "kernel: $(uname -r)"
+  echo "kernel command line: $(cat /proc/cmdline)"
+  if [ -d /sys/firmware/efi ]; then
+    echo "boot mode: UEFI (firmware word size: $(cat /sys/firmware/efi/fw_platform_size 2> /dev/null || echo unknown) bit)"
+  else
+    echo "boot mode: legacy BIOS (or UEFI compatibility mode)"
+  fi
+
+  section "Machine"
+  for f in sys_vendor product_name product_version product_family board_vendor board_name board_version bios_vendor bios_version bios_date chassis_type; do
+    printf '%-16s %s\n' "$f" "$(cat "/sys/class/dmi/id/$f" 2> /dev/null || echo '-')"
+  done
+  run dmidecode -t system -t baseboard -t bios -t chassis
+  run dmidecode -t processor
+  run dmidecode -t memory
+
+  section "Firmware and boot entries"
+  run efibootmgr -v
+  run mokutil --sb-state
+
+  section "CPU"
+  run lscpu
+  printf '\nInstruction sets: '
+  for f in ssse3 sse4_1 sse4_2 popcnt aes avx avx2 vmx lm; do
+    if grep -qw "$f" /proc/cpuinfo; then printf '%s=yes ' "$f"; else printf '%s=no ' "$f"; fi
+  done
+  echo
+
+  section "Memory"
+  run free -m
+
+  section "PCI devices (vendor:device ids and the kernel driver in use)"
+  run lspci -nnk
+
+  section "Network chips in detail (wired, then wireless)"
+  run lspci -nnvv -d ::0200
+  run lspci -nnvv -d ::0280
+
+  section "Graphics and audio chips in detail"
+  run lspci -nnvv -d ::0300
+  run lspci -nnvv -d ::0403
+  run lspci -nnvv -d ::0401
+
+  section "USB"
+  run lsusb
+  run lsusb -t
+
+  section "Storage"
+  run lsblk -o NAME,SIZE,TYPE,ROTA,TRAN,MODEL,FSTYPE,LABEL,MOUNTPOINT
+  run blkid
+  run fdisk -l
+  for d in $(lsblk -dno NAME,TYPE 2> /dev/null | awk '$2 == "disk" {print $1}'); do
+    case "$d" in loop* | ram*) continue ;; esac
+    run smartctl -a "/dev/$d"
+    run hdparm -I "/dev/$d"
+  done
+
+  section "Network"
+  run ip -br link
+  run ip -br addr
+  for n in $(ls /sys/class/net 2> /dev/null); do
+    [ "$n" = lo ] && continue
+    run ethtool -i "$n"
+    run ethtool "$n"
+  done
+  run rfkill list
+  run iw dev
+  run iw list
+  run lsmod
+
+  section "Kernel messages about wireless, firmware and network chips"
+  dmesg 2> /dev/null | grep -iE 'b43|bcma|ssb|brcm|wl:|wlan|iwl|ath[0-9k]|rtl8|wifi|wireless|firmware|forcedeth|tg3|r8169|e1000|igb' | head -n 80
+
+  section "Graphics and displays"
+  run ls /sys/class/drm
+  for e in /sys/class/drm/*/edid; do
+    [ -s "$e" ] || continue
+    echo "$e"
+    edid-decode "$e" 2>&1 | head -n 40
+  done
+  dmesg 2> /dev/null | grep -iE 'drm|nouveau|efifb|simpledrm|framebuffer' | head -n 40
+
+  section "Audio"
+  run cat /proc/asound/cards
+  run aplay -l
+  run arecord -l
+
+  section "Input devices"
+  run cat /proc/bus/input/devices
+
+  section "Sensors and temperatures"
+  for z in /sys/class/thermal/thermal_zone*; do
+    [ -d "$z" ] || continue
+    echo "$(basename "$z") $(cat "$z/type" 2> /dev/null) $(cat "$z/temp" 2> /dev/null)"
+  done
+  run sensors
+
+  section "Hardware summary (lshw)"
+  run lshw -sanitize -short
+
+  section "Kernel messages with errors or warnings"
+  dmesg --level=err,warn 2>&1 | tail -n 100
+}
+
+redact() {
+  if [ "$FULL" = 1 ]; then
+    cat
+    return
+  fi
+  sed -E \
+    -e 's/(Serial Number|Serial number|SerialNumber|Asset Tag|Service Tag|UUID|serial)([: =]+)[^[:space:]].*/\1\2<redacted>/' \
+    -e 's/(UUID|PARTUUID|PTUUID)="[^"]*"/\1="<redacted>"/g' \
+    -e 's/(([0-9A-Fa-f]{2}:){3})([0-9A-Fa-f]{2}:){2}[0-9A-Fa-f]{2}/\1xx:xx:xx/g'
+}
+
+gather > "$RAW" 2>&1
+redact < "$RAW" > "$REPORT"
+dmesg 2> /dev/null | redact > "$DMESG"
+rm -f "$RAW"
+if [ "$FULL" = 1 ]; then NOTE="(full: serial numbers and MAC addresses are included)"; else NOTE="(serial numbers, UUIDs and half of each MAC address are removed)"; fi
+
+# ---- the short version for the screen --------------------------------------------
+summary() {
+  local d id
+  echo "=============================================================================="
+  echo " JARVIS Probe - what this computer reports"
+  echo "=============================================================================="
+  echo " Machine:    $(cat /sys/class/dmi/id/sys_vendor 2> /dev/null) $(cat /sys/class/dmi/id/product_name 2> /dev/null) $(cat /sys/class/dmi/id/product_version 2> /dev/null)"
+  echo " Firmware:   $(cat /sys/class/dmi/id/bios_vendor 2> /dev/null) $(cat /sys/class/dmi/id/bios_version 2> /dev/null), $(grep -m1 '^boot mode' "$REPORT" | cut -d: -f2- | sed 's/^ //')"
+  echo " CPU:        $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ //'), $(nproc) threads"
+  echo " Sets:       $(grep -m1 '^Instruction sets' "$REPORT" | cut -d: -f2- | sed 's/^ //')"
+  echo " Memory:     $(free -m | awk '/^Mem:/ {print $2 " MB"}')"
+  for d in $(lsblk -dno NAME,TYPE 2> /dev/null | awk '$2 == "disk" {print $1}'); do
+    case "$d" in loop* | ram*) continue ;; esac
+    id=$(lsblk -dno SIZE,MODEL,ROTA "/dev/$d" 2> /dev/null | awk '{kind = ($NF == "1") ? "hard disk" : "SSD/flash"; $NF = ""; print $0 "(" kind ")"}')
+    echo " Disk:       /dev/$d  $id"
+  done
+  for d in /sys/class/net/*; do
+    [ "$(basename "$d")" = lo ] && continue
+    echo " Network:    $(basename "$d")  driver=$(basename "$(readlink "$d/device/driver" 2> /dev/null)" 2> /dev/null)  state=$(cat "$d/operstate" 2> /dev/null)"
+  done
+  lspci -nn 2> /dev/null | grep -iE 'ethernet|network|vga|audio' | sed 's/^[^ ]* /             chip: /'
+  echo " Sound:      $(grep -c '^ *[0-9]' /proc/asound/cards 2> /dev/null || echo 0) card(s)"
+  echo
+  echo " Full report $NOTE:"
+  if [ -n "$(ipv4)" ]; then
+    echo "   from another computer on this network: http://$(ipv4):8080/report.txt"
+    echo "                                          http://$(hostname).local:8080/report.txt"
+    echo "   (reachable for 20 minutes)"
+  else
+    echo "   no network address yet (is the cable plugged in?)"
+  fi
+  echo "   or plug in a USB stick named REPORT (FAT32): it is copied there by itself."
+  echo "   On this computer: press Alt+F2 for a shell, then: less /run/probe/www/report.txt"
+  echo "=============================================================================="
+}
+SHORT=$(summary)
+for t in /dev/tty1 /dev/ttyS0; do
+  [ -c "$t" ] && printf '\n%s\n' "$SHORT" > "$t" 2> /dev/null
+done
+
+systemctl start jarvis-probe-http.service 2> /dev/null || true
+kmsg "JARVIS-PROBE: DONE"
+
+# ---- copy to a USB stick named REPORT, now or whenever one is plugged in ------------------
+saved=0
+t=0
+while [ "$t" -lt 1200 ]; do
+  dev=$(blkid -L REPORT 2> /dev/null || true)
+  if [ -n "$dev" ] && [ "$saved" = 0 ]; then
+    mkdir -p /mnt/probe-usb
+    if mount -t vfat -o rw,sync "$dev" /mnt/probe-usb 2> /dev/null || mount -o rw,sync "$dev" /mnt/probe-usb 2> /dev/null; then
+      stamp=$(date -u +%Y%m%d-%H%M%S)
+      cp "$REPORT" "/mnt/probe-usb/jarvis-probe-$stamp.txt" && cp "$DMESG" "/mnt/probe-usb/jarvis-probe-$stamp-dmesg.txt"
+      sync
+      umount /mnt/probe-usb
+      saved=1
+      msg="Saved the report to the USB stick REPORT as jarvis-probe-$stamp.txt. You can remove it now."
+      for tty in /dev/tty1 /dev/ttyS0; do
+        [ -c "$tty" ] && printf '\n %s\n' "$msg" > "$tty" 2> /dev/null
+      done
+      kmsg "JARVIS-PROBE: SAVED to REPORT as jarvis-probe-$stamp.txt"
+    fi
+  fi
+  sleep 5
+  t=$((t + 5))
+done
+kmsg "finished"

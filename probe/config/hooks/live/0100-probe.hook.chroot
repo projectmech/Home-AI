@@ -1,0 +1,21 @@
+#!/bin/sh
+# Runs inside the probe image's chroot after packages and files are in place.
+set -e
+
+chmod 0755 /usr/local/sbin/jarvis-probe
+
+# The Alt+F2 shell logs in as root without a password (see autologin.conf).
+passwd -d root
+
+# No user account from live-config.
+find /lib/live/config -name '*user-setup*' -exec rm -f {} + || true
+
+systemctl enable jarvis-probe.service
+systemctl enable systemd-networkd.service
+
+# If a tool the report depends on is missing, the probe is useless: fail loudly.
+for t in lspci lsusb dmidecode smartctl lshw ethtool efibootmgr aplay edid-decode busybox; do
+  command -v "$t" > /dev/null || { echo "ERROR: $t is not in the probe image" >&2; exit 1; }
+done
+/bin/busybox httpd --help 2>&1 | head -n 1 > /dev/null || true
+/bin/busybox --list | grep -qx httpd || { echo "ERROR: this busybox has no httpd" >&2; exit 1; }

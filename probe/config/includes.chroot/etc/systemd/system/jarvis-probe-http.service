@@ -1,0 +1,7 @@
+[Unit]
+Description=JARVIS Probe report page on port 8080 (stops after 20 minutes)
+
+[Service]
+Type=simple
+ExecStart=/bin/busybox httpd -f -p 8080 -h /run/probe/www
+RuntimeMaxSec=1200
