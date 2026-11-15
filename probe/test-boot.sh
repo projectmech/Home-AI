@@ -121,6 +121,13 @@ kill -0 "$QPID" 2> /dev/null && { monitor "quit"; sleep 2; }
 NAMES=$(mdir -b -i "$IMG" :: 2>&1 || true)
 grep -q 'jarvis-probe-' <<< "$NAMES" || fail "the USB stick holds no report (found: $NAMES)"
 mcopy -i "$IMG" "::/jarvis-probe-*.txt" "$WORK/" 2> /dev/null || fail "cannot read the report back from the stick"
-COPY=$(ls "$WORK"/jarvis-probe-*.txt | head -n 1)
+COPY=""
+for f in "$WORK"/jarvis-probe-*.txt; do
+  case "$f" in
+    *-dmesg.txt) ;; # the kernel log copy has no sections
+    *) COPY=$f ;;
+  esac
+done
+[ -n "$COPY" ] || fail "the stick holds a kernel log but no report"
 grep -q '^== CPU ==' "$COPY" || fail "the copy on the stick has no CPU section"
 echo "RESULT: PASS ($MODE: report served and saved; $(wc -l < "$REPORT") lines)"
