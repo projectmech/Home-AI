@@ -129,6 +129,37 @@ if wait_ready 600; then
 else
   warn "PENRYN (Core 2) RUN: server did not start" "$(tail -n 15 "$OUT/serve-penryn.log")"
 fi
+# ---- 3b. the ENGINE (llama-server) itself on the emulated Core 2 ----------------------------
+# Ollama starts its engine as a separate program. Whether that child really
+# ran emulated is not certain (the server log above reported AVX-512, which an
+# emulated Core 2 does not have), so run the engine directly under the emulator
+# on the model Ollama just downloaded.
+kill "$SERVE" 2>/dev/null || true
+wait "$SERVE" 2>/dev/null || true
+BLOB=$(ls -S "$OLLAMA_MODELS"/blobs/sha256-* 2>/dev/null | head -n 1 || true)
+if [ -n "$BLOB" ] && [ -x "$LIBDIR/llama-server" ]; then
+  QEMU_CPU=Penryn qemu-x86_64 -cpu Penryn "$LIBDIR/llama-server" -m "$BLOB" --host 127.0.0.1 --port 18090 -c 256 -t 2 > "$OUT/engine-penryn.log" 2>&1 &
+  ENGINE=$!
+  ready=0
+  for _ in $(seq 1 200); do
+    curl -fsS --max-time 5 http://127.0.0.1:18090/health > /dev/null 2>&1 && { ready=1; break; }
+    kill -0 "$ENGINE" 2>/dev/null || break
+    sleep 3
+  done
+  if [ "$ready" = 1 ]; then
+    r=$(timeout 1200 curl -fsS --max-time 1100 http://127.0.0.1:18090/completion -d '{"prompt":"Hello","n_predict":6,"temperature":0}' | jq -r '.content' | tr '
+' ' ') || true
+    note "ENGINE (llama-server) ON AN EMULATED CORE 2: answered" "text: ${r:-nothing}"
+  else
+    warn "ENGINE (llama-server) ON AN EMULATED CORE 2: did not start" "$(tail -n 15 "$OUT/engine-penryn.log")"
+  fi
+  grep -iE 'system_info|load_backend|CPU :|SSE|AVX' "$OUT/engine-penryn.log" | head -n 8 > "$OUT/engine-flags.txt" || true
+  note "which CPU features the engine saw on the emulated Core 2" "$(cat "$OUT/engine-flags.txt") (no AVX here means the emulation is real)"
+  kill "$ENGINE" 2>/dev/null || true
+else
+  warn "engine test skipped" "no model blob or no llama-server in $LIBDIR"
+fi
+
 grep -iE 'illegal instruction|SIGILL|unsupported|requires|avx|sse4|cpu backend|load_backend|system info' "$OUT/serve-penryn.log" | head -n 12 > "$OUT/penryn-flags.txt" || true
 note "what the emulated Core 2 server said about the CPU" "$(cat "$OUT/penryn-flags.txt") (empty: nothing about instruction sets)"
 kill "$SERVE" 2>/dev/null || true

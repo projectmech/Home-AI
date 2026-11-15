@@ -1,13 +1,14 @@
 name: LLM bench
 
-# Can the 2010 Core 2 Duo run Ollama (the local model service)? See
-# llm/bench.sh and llm/build-ollama.sh.
+# Can the 2010 Core 2 Duo run Ollama (the local model service)? See llm/bench.sh.
 #
-# Earlier verdicts ("the official v0.40.16 needs x86-64-v3", "the source build
-# needs v3 too") came from running on the ubuntu runner: its C library makes
-# every program die on an emulated Core 2, even a trivial one (found by another
-# session, see docs/ROADMAP.md). So both jobs now run inside debian:trixie,
-# whose libc is baseline x86-64, which is also what the OS image uses.
+# History: runs on the ubuntu runner said the official binary "needs
+# x86-64-v3", but the runner's own C library stops every program on an emulated
+# Core 2 (another session found this). The job therefore runs inside
+# debian:trixie, whose libc is baseline x86-64 and is what the OS image uses.
+# In Debian the official v0.40.16 server answered on an emulated Core 2.
+# llm/build-ollama.sh (build from source) is kept for reference but is not run:
+# it is not needed.
 on:
   workflow_dispatch:
   push:
@@ -19,11 +20,7 @@ on:
 permissions:
   contents: read
 
-env:
-  OLLAMA_VERSION: v0.40.16
-
 jobs:
-  # The official release binary on an emulated Core 2, in Debian's libc.
   ollama-official:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -37,21 +34,3 @@ jobs:
             echo "control: /bin/true on an emulated Core 2:"
             QEMU_CPU=Penryn qemu-x86_64 -cpu Penryn /bin/true && echo "control passed"
             bash llm/bench.sh'
-
-  # Ollama built from source, in case the official binary needs a newer CPU.
-  ollama-source:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-      - name: Get the Ollama source
-        run: git clone --depth 1 --branch "$OLLAMA_VERSION" https://github.com/ollama/ollama.git ollama-src
-      - name: Build Ollama for a baseline x86-64 CPU and test it (inside golang:1.26-trixie)
-        run: |
-          docker run --rm -v "$PWD:/w" -w /w golang:1.26-trixie bash -ec '
-            apt-get update -qq
-            apt-get install -y --no-install-recommends qemu-user jq binutils curl ca-certificates cmake ninja-build build-essential git zstd >/dev/null
-            echo "control: /bin/true on an emulated Core 2:"
-            QEMU_CPU=Penryn qemu-x86_64 -cpu Penryn /bin/true && echo "control passed"
-            bash llm/build-ollama.sh /w/ollama-src /w/llm/dist
-            OLLAMA_DIR=/w/llm/dist bash llm/bench.sh'

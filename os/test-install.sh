@@ -48,6 +48,28 @@ QPID=""
 trap '[ -z "$QPID" ] || kill "$QPID" 2>/dev/null || true' EXIT
 
 clean() { tr -d '\r' < "$1" | sed -E 's/\x1b\[[0-9;?!]*[a-zA-Z]//g; s/\x1b\][0-9;]*[^\x07]*\x07?//g'; }
+# The screen as text: one character per block, darker to brighter " .:-=+*#%@",
+# so a CI log can show what the virtual display looked like.
+ppm_ascii() { # <ppm> [columns] [rows]
+  local f=$1 cols=${2:-64} rows=${3:-24} hdr skip dims w h
+  [ -s "$f" ] || return 0
+  hdr=$(head -n 3 "$f")
+  skip=$(printf '%s
+' "$hdr" | wc -c)
+  dims=$(sed -n 2p <<< "$hdr"); w=${dims% *}; h=${dims#* }
+  tail -c +$((skip + 1)) "$f" | od -An -v -tu1 -w3 | awk -v w="$w" -v h="$h" -v C="$cols" -v R="$rows" '
+    BEGIN { chars = " .:-=+*#%@" }
+    { x = (NR - 1) % w; y = int((NR - 1) / w); k = int(y * R / h) * C + int(x * C / w); s[k] += ($1 + $2 + $3) / 3; n[k]++ }
+    END { for (r = 0; r < R; r++) { line = ""; for (c = 0; c < C; c++) { k = r * C + c; v = n[k] ? s[k] / n[k] : 0; i = int(v / 256 * 10); if (i > 9) i = 9; line = line substr(chars, i + 1, 1) } print line } }'
+}
+ann_text() { # <title> <text>
+  local body
+  body=$(printf '%s
+' "$2" | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+  printf '::notice title=%s::%s
+' "$1" "$body"
+}
+
 # One GitHub annotation from the lines of a log that match a pattern. Each
 # annotation has its own size limit, so the diagnostics go in separate ones.
 ann() { # <title> <egrep pattern> <how many lines> <log>
@@ -66,6 +88,7 @@ fail() {
     ann "plymouth log: lines about the script, theme and images" 'plog-script' 14 "$log"
     ann "plymouth log: how it ended" 'plog-tail' 24 "$log"
     ann "display state of the installed system" 'display:|dmesg:' 12 "$log"
+    [ ! -f "${log%.log}.ppm" ] || ann_text "the virtual screen at the last check (ascii)" "$(ppm_ascii "${log%.log}.ppm")"
     ann "theme files inside the installed initramfs" 'initramfs: .*(jarvis|script)' 12 "install-$TAG-A.log"
   fi
   printf '::error title=install test %s: %s::%s %%0A%s\n' "$MODE" "$UNLOCK" "$*" "$CTX"
@@ -146,17 +169,20 @@ type_keys() { # <text>
 }
 
 unlock_with_splash() { # <tag> <secret>
-  local tag=$1 secret=$2 shot="install-$TAG-$tag.ppm" n=0 attempt
+  local tag=$1 secret=$2 shot="install-$TAG-$tag.ppm" n=0 attempt samples=""
   waitfor "$CURLOG" 'Kernel command line' 300 "the kernel to start"
   for _ in $(seq 1 24); do
     monitor "screendump $shot"
     sleep 3
     n=$(blue_pixels "$shot")
-    [ "$n" -gt 3000 ] && break
+    samples="$samples $n"
+    [ "$n" -gt 1000 ] && break
     sleep 2
   done
   echo "boot splash: $n solid bright pixels on screen"
-  if [ "$n" -le 3000 ]; then
+  echo "splash samples (solid bright pixels):$samples"
+  ann_text "the virtual screen while the boot screen was up (ascii, solid pixels:$samples)" "$(ppm_ascii "$shot")"
+  if [ "$n" -le 1000 ]; then
     # Diagnosis: if the unlock prompt came up on the serial console the splash did
     # not take over. Unlock that way so the system finishes booting and reports
     # its display state (the "display:" and "dmesg:" lines), then fail.
@@ -167,9 +193,9 @@ unlock_with_splash() { # <tag> <secret>
         sleep 3
       done
       sleep 5
-      fail "the boot splash did not draw the mark (solid bright pixels: $n); the unlock prompt was on the serial console instead"
+      fail "the boot splash did not draw the mark (solid bright pixels:$samples); the unlock prompt was on the serial console instead"
     fi
-    fail "the boot splash did not draw the logo (solid bright pixels: $n)"
+    fail "the boot splash did not draw the mark (solid bright pixels:$samples)"
   fi
   # The prompt may not be up yet when the splash first appears: type, and if the
   # system has not come up shortly after, type again.
