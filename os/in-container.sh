@@ -24,7 +24,7 @@ lb config \
   --distribution trixie \
   --architectures amd64 \
   --linux-flavours amd64 \
-  --archive-areas main \
+  --archive-areas "main contrib non-free non-free-firmware" \
   --apt-recommends false \
   --binary-images iso-hybrid \
   --debian-installer none \
@@ -36,11 +36,12 @@ lb config \
 
 cp -a /stage/config/. config/
 
-# ---- the local AI model server: llama.cpp's llama-server, built for a Core 2 --------------
-# Pinned to one commit. -march=core2 with every AVX option off: the 2010 Mac mini's
-# CPU has neither AVX nor SSE4.2. Built here, in debian:trixie (baseline x86-64 C
-# library, the same as the image), and copied in. The language MODEL is not in the
-# image: `jarvis-model install` downloads it with a pinned hash (docs/AI.md).
+# ---- the local AI model server: llama.cpp's llama-server, built for Sandy Bridge ----------
+# Pinned to one commit. Built for the owner's real CPU, measured by JARVIS Probe: a
+# Core i5-2415M (Sandy Bridge): SSE4.2, POPCNT and AVX yes; AVX2, FMA, F16C and BMI no.
+# Built here, in debian:trixie (the same C library as the image), and copied in. The
+# language MODEL is not in the image: `jarvis-model install` downloads it with a pinned
+# hash (docs/AI.md).
 LLAMA_COMMIT=b1b770d90d94cad9e9ea5b993bdbc383a522fb28
 apt-get install -y --no-install-recommends build-essential cmake git
 mkdir -p /build/llama
@@ -51,16 +52,17 @@ git fetch -q --depth 1 origin "$LLAMA_COMMIT"
 git checkout -q FETCH_HEAD
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DLLAMA_CURL=OFF \
   -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
-  -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF \
-  -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF -DGGML_SSE42=OFF \
-  -DCMAKE_C_FLAGS="-march=core2 -mtune=core2 -O2" -DCMAKE_CXX_FLAGS="-march=core2 -mtune=core2 -O2"
+  -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_LLAMAFILE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF \
+  -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF -DGGML_SSE42=ON \
+  -DCMAKE_C_FLAGS="-march=sandybridge -mtune=sandybridge -O2" -DCMAKE_CXX_FLAGS="-march=sandybridge -mtune=sandybridge -O2"
 cmake --build build -j"$(nproc)" --target llama-server
 install -D -m 0755 build/bin/llama-server /build/lb/config/includes.chroot/usr/local/bin/llama-server
-# The build fails if the binary contains an AVX or SSE4.2 instruction a Core 2 lacks.
+# The build fails if the binary contains an instruction Sandy Bridge lacks (AVX-512,
+# FMA, F16C, AVX2 integer broadcasts and permutes, gathers).
 objdump -d --no-show-raw-insn build/bin/llama-server > /tmp/llama.asm
-BAD=$(grep -cE '%(ymm|zmm)[0-9]+|^[[:space:]]*[0-9a-f]+:[[:space:]]+v[a-z0-9]+[[:space:]]|[[:space:]](popcnt|crc32|pcmpestri|pcmpistri|pcmpgtq)[[:space:]]' /tmp/llama.asm || true)
+BAD=$(grep -cE '%zmm[0-9]+|[[:space:]](vfmadd|vfnmadd|vfmsub|vfnmsub|vcvtph2ps|vcvtps2ph|vpbroadcast|vperm2i128|vpermd|vpermq|vpgather|vgather)[a-z0-9]*[[:space:]]' /tmp/llama.asm || true)
 rm -f /tmp/llama.asm
-[ "$BAD" = 0 ] || { echo "ERROR: llama-server contains $BAD instructions a Core 2 lacks" >&2; exit 1; }
+[ "$BAD" = 0 ] || { echo "ERROR: llama-server contains $BAD instructions Sandy Bridge lacks" >&2; exit 1; }
 cd /build/lb
 
 lb build
@@ -68,12 +70,13 @@ lb build
 ISO=$(ls /build/lb/*.iso | head -n 1)
 
 # ---- the Mac mini's Ethernet driver must be in the image ---------------------
-# Macmini4,1: NVIDIA MCP89 Ethernet (PCI 10de:0d7d), driven by forcedeth, which
-# needs no firmware. Fail the build if the module is missing from the image.
+# The owner's machine (measured by JARVIS Probe): Macmini5,1 with a Broadcom BCM57765
+# Gigabit Ethernet (14e4:16b4), driven by tg3. (An earlier guess, the 2010 model's
+# NVIDIA forcedeth, is also kept: harmless.) Fail the build if tg3 is missing.
 echo "network drivers present in the image:"
 find /build/lb/chroot -path '*/drivers/net/ethernet/*' \( -name 'forcedeth.ko*' -o -name 'tg3.ko*' -o -name 'r8169.ko*' -o -name 'e1000e.ko*' -o -name 'igb.ko*' \) -printf '  %f\n' | sort -u
-find /build/lb/chroot -name 'forcedeth.ko*' | grep -q . \
-  || { echo "ERROR: forcedeth (the Mac mini's Ethernet driver) is not in the image" >&2; exit 1; }
+find /build/lb/chroot -name 'tg3.ko*' | grep -q . \
+  || { echo "ERROR: tg3 (the Mac mini 5,1's Ethernet driver) is not in the image" >&2; exit 1; }
 
 # ---- start by itself: boot the default entry after 5 seconds ------------------
 # Debian live menus wait forever for a key (isolinux "timeout 0"; GRUB with no

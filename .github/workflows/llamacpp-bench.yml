@@ -14,6 +14,7 @@ on:
     branches: [main]
     paths:
       - llm/llamacpp-bench.sh
+      - llm/llamacpp-sandybridge.sh
       - .github/workflows/llamacpp-bench.yml
 
 permissions:
@@ -31,3 +32,16 @@ jobs:
             apt-get update -qq &&
             apt-get install -y -qq --no-install-recommends build-essential cmake git curl jq bc binutils qemu-user ca-certificates > /dev/null &&
             bash llm/llamacpp-bench.sh'
+
+  # The build the OS image actually ships: Sandy Bridge (AVX), for the owner's Core i5-2415M.
+  sandybridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build llama-server for Sandy Bridge, run it on an emulated Sandy Bridge, time Qwen (in Debian trixie)
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w debian:trixie bash -c '
+            apt-get update -qq &&
+            apt-get install -y -qq --no-install-recommends build-essential cmake git curl jq bc binutils qemu-user ca-certificates > /dev/null &&
+            bash llm/llamacpp-sandybridge.sh'

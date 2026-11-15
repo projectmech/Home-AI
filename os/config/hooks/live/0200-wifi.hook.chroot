@@ -1,0 +1,38 @@
+#!/bin/sh
+# Wi-Fi for the owner's Mac mini: Broadcom BCM4331 (PCI 14e4:4331), found by JARVIS
+# Probe. The open-source b43 driver binds it but needs firmware that is not in
+# Debian main and only offers 2.4 GHz; the proprietary wl driver (broadcom-sta, in
+# Debian non-free) does 2.4 and 5 GHz and needs no separate firmware. wl is built
+# here for the image's kernel, kept, and the build tools are removed again.
+#
+# A failure here must not stop the whole image: it is reported loudly and the ISO
+# inspection in CI then marks the missing module.
+set +e
+export DEBIAN_FRONTEND=noninteractive
+chmod 0755 /usr/local/sbin/jarvis-wifi
+
+KVER=$(ls /lib/modules | sort -V | tail -n 1)
+echo "wifi hook: building wl for kernel $KVER"
+LOG=/tmp/wifi-build.log
+: > "$LOG"
+apt-get install -y --no-install-recommends dkms linux-headers-amd64 gcc make libc6-dev broadcom-sta-dkms >> "$LOG" 2>&1
+dkms autoinstall -k "$KVER" >> "$LOG" 2>&1
+
+WL=$(find "/lib/modules/$KVER" -name 'wl.ko*' | head -n 1)
+if [ -n "$WL" ]; then
+  mkdir -p /tmp/wl
+  cp "$WL" /tmp/wl/
+  NAME=$(basename "$WL")
+  # Remove the build tools (the module is kept): about 400 MB less in the image.
+  apt-get purge -y broadcom-sta-dkms dkms gcc make 'linux-headers-*' >> "$LOG" 2>&1
+  apt-get autoremove -y --purge >> "$LOG" 2>&1
+  mkdir -p "/lib/modules/$KVER/extra"
+  cp "/tmp/wl/$NAME" "/lib/modules/$KVER/extra/$NAME"
+  depmod -a "$KVER"
+  echo "wifi hook: wl installed as /lib/modules/$KVER/extra/$NAME"
+else
+  echo "wifi hook: WARNING: the wl module was not built. Last lines of the log:"
+  tail -n 40 "$LOG"
+fi
+rm -rf /tmp/wl "$LOG"
+exit 0

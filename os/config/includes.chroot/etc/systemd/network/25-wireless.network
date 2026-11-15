@@ -1,0 +1,9 @@
+[Match]
+Name=wl* wlan*
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+# Prefer the cable when both are connected.
+RouteMetric=600

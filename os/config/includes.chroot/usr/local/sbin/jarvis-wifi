@@ -1,0 +1,72 @@
+#!/bin/bash
+# Join a Wi-Fi network from the console: jarvis-wifi status | scan | connect SSID | forget
+#
+# The password is read without echo, turned into a key (wpa_passphrase) and only
+# that key is stored, in a file only root can read. The wired connection is
+# preferred when both are up.
+set -euo pipefail
+
+IF=""
+for d in /sys/class/net/*; do
+  n=$(basename "$d")
+  case "$n" in wl* | wlan*) IF=$n; break ;; esac
+done
+
+need_if() {
+  [ -n "$IF" ] || {
+    echo "No Wi-Fi interface was found. The Mac mini's chip needs the wl driver: run 'lsmod | grep wl' and 'dmesg | grep -i wl'." >&2
+    exit 1
+  }
+}
+need_root() { [ "$(id -u)" = 0 ] || { echo "run as root: sudo jarvis-wifi $*" >&2; exit 1; }; }
+
+case "${1:-status}" in
+  status)
+    need_if
+    echo "interface: $IF"
+    iw dev "$IF" link 2> /dev/null || true
+    ip -br addr show "$IF" || true
+    systemctl is-active "wpa_supplicant@$IF.service" 2> /dev/null || true
+    ;;
+  scan)
+    need_if
+    need_root scan
+    ip link set "$IF" up
+    iw dev "$IF" scan 2> /dev/null | awk -F': ' '/SSID:/ {print $2}' | sort -u
+    ;;
+  connect)
+    need_if
+    need_root connect
+    SSID=${2:-}
+    [ -n "$SSID" ] || { echo "usage: jarvis-wifi connect SSID" >&2; exit 2; }
+    read -r -s -p "Password for $SSID (leave empty for an open network): " PASS
+    echo
+    CONF="/etc/wpa_supplicant/wpa_supplicant-$IF.conf"
+    umask 077
+    {
+      echo 'ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev'
+      echo 'update_config=0'
+      if [ -n "$PASS" ]; then
+        wpa_passphrase "$SSID" "$PASS" | grep -v '#psk'
+      else
+        printf 'network={\n\tssid="%s"\n\tkey_mgmt=NONE\n}\n' "$SSID"
+      fi
+    } > "$CONF"
+    unset PASS
+    systemctl enable "wpa_supplicant@$IF.service" > /dev/null 2>&1 || true
+    systemctl restart "wpa_supplicant@$IF.service"
+    systemctl restart systemd-networkd
+    echo "Connecting. Check with: jarvis-wifi status"
+    ;;
+  forget)
+    need_if
+    need_root forget
+    systemctl disable --now "wpa_supplicant@$IF.service" 2> /dev/null || true
+    rm -f "/etc/wpa_supplicant/wpa_supplicant-$IF.conf"
+    echo "The saved network was removed."
+    ;;
+  *)
+    echo "usage: jarvis-wifi status | scan | connect SSID | forget" >&2
+    exit 2
+    ;;
+esac

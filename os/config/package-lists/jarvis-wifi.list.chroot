@@ -1,0 +1,5 @@
+# Wi-Fi: join a network with jarvis-wifi (wpa_supplicant does the work).
+wpasupplicant
+iw
+rfkill
+wireless-regdb
