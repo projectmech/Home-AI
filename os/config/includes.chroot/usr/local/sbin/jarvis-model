@@ -53,8 +53,44 @@ install_model() {
   status
 }
 
+# No network on this computer? Download the model file on another computer
+# (the address is MODEL_URL above), copy it onto a USB stick, plug the stick in and
+# run: sudo jarvis-model install-usb
+# The file is checked against the same pinned SHA-256, so a wrong or damaged file is refused.
+install_usb() {
+  [ "$(id -u)" = 0 ] || { echo "run as root: sudo jarvis-model install-usb" >&2; exit 1; }
+  [ -n "$MODEL_SHA256" ] || { echo "This build has no pinned hash for the model." >&2; exit 1; }
+  local dev found="" mnt=/mnt/jarvis-usb name
+  mkdir -p "$mnt"
+  while read -r dev; do
+    [ -n "$dev" ] || continue
+    mount -o ro "$dev" "$mnt" 2> /dev/null || continue
+    for name in model.gguf qwen2.5-1.5b-instruct-q4_k_m.gguf; do
+      if [ -f "$mnt/$name" ]; then
+        echo "Found $name on $dev; checking it (this takes a moment)..."
+        if [ "$(sha256sum "$mnt/$name" | cut -d' ' -f1)" = "$MODEL_SHA256" ]; then found="$mnt/$name"; break; fi
+        echo "$name on $dev does not match the expected model (wrong or damaged file). Skipping it." >&2
+      fi
+    done
+    if [ -n "$found" ]; then
+      install -d -m 0755 "$DIR"
+      cp "$found" "$DIR/.usb.tmp" && chmod 0644 "$DIR/.usb.tmp" && mv -f "$DIR/.usb.tmp" "$MODEL"
+      umount "$mnt"
+      systemctl restart jarvis-llm.service
+      echo "Installed from the USB stick. You can remove it now."
+      status
+      return 0
+    fi
+    umount "$mnt" 2> /dev/null || true
+  done < <(lsblk -rpno NAME,TYPE,FSTYPE 2> /dev/null | awk '$2 == "part" && $3 != "" && $3 != "crypto_LUKS" && $3 != "swap" {print $1}')
+  echo "No USB stick with the model file was found." >&2
+  echo "Put the file $MODEL_URL on a USB stick (name it model.gguf) and try again." >&2
+  exit 1
+}
+
 case "${1:-status}" in
   status) status ;;
   install) install_model ;;
-  *) echo "usage: jarvis-model status | install" >&2; exit 2 ;;
+  install-usb) install_usb ;;
+  *) echo "usage: jarvis-model status | install | install-usb" >&2; exit 2 ;;
 esac

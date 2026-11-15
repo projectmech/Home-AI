@@ -110,7 +110,9 @@ wifi_flow() {
     ifw=$(wifi_if)
   fi
   if [ -z "$ifw" ]; then
-    msg "No Wi-Fi adapter was found.\n\nThe Mac mini's Wi-Fi chip (Broadcom BCM4331) needs a driver that is part of this installer. If you see this, the adapter did not start. You can use the Ethernet cable instead, or set Wi-Fi up later with: sudo jarvis-wifi connect <network>" "Wi-Fi" 14
+    local diag
+    diag=$(dmesg 2>/dev/null | grep -iE 'wl|brcm|b43|bcma|4331|cfg80211' | tail -n 5 | cut -c1-66)
+    msg "No Wi-Fi adapter was found.\n\nThe Mac mini's Wi-Fi chip (Broadcom BCM4331) needs a driver that is part of this installer, so the adapter did not start. Please tell the developer what follows:\n\n${diag:-(no messages about the Wi-Fi chip)}\n\nYou can go Back and use the Ethernet cable, or skip the network and set it up later." "Wi-Fi" 20
     return 1
   fi
   rfkill unblock wifi > /dev/null 2>&1 || true
@@ -166,7 +168,7 @@ network() {
     ip=$(wired_ip)
     wlan=$(wifi_if)
     if [ -n "$ip" ]; then wstate="connected ($ip)"; else wstate="not connected"; fi
-    opt=$(T --title "Step 2 of 5: Network" --ok-button "Next" --cancel-button "Back" \
+    opt=$(T --title "Step 2 of 5: Network" --default-item "$([ -n "$ip" ] && echo wired || echo wifi)" --ok-button "Next" --cancel-button "Back" \
       --menu "A network lets JARVIS be reached from your other devices.\n\nCable: $wstate\nWi-Fi adapter: $([ -n "$wlan" ] && echo found || echo 'not started yet')" 20 70 4 \
       wired "Use the Ethernet cable" \
       wifi "Connect to a Wi-Fi network" \

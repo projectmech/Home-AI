@@ -30,6 +30,18 @@ if [ -n "$WL" ]; then
   cp "/tmp/wl/$NAME" "/lib/modules/$KVER/extra/$NAME"
   depmod -a "$KVER"
   echo "wifi hook: wl installed as /lib/modules/$KVER/extra/$NAME"
+  # A record for CI: the module is for this kernel, knows the Mac mini's chip
+  # (PCI 14e4:4331) and its dependencies exist.
+  mkdir -p /usr/share/jarvis
+  {
+    echo "kernel: $KVER"
+    echo "module: /lib/modules/$KVER/extra/$NAME"
+    modinfo -k "$KVER" wl 2>&1 | grep -E '^(version|vermagic|depends|license):' | sed 's/  */ /g'
+    echo "alias for the BCM4331 (14e4:4331): $(modinfo -k "$KVER" -F alias wl 2> /dev/null | grep -ci 'v000014E4d00004331') match(es)"
+    for dep in $(modinfo -k "$KVER" -F depends wl 2> /dev/null | tr ',' ' '); do
+      if find "/lib/modules/$KVER" -name "$dep.ko*" | grep -q .; then echo "dependency $dep: present"; else echo "dependency $dep: MISSING (or built into the kernel)"; fi
+    done
+  } > /usr/share/jarvis/wifi-driver.txt 2>&1
 else
   echo "wifi hook: WARNING: the wl module was not built. Last lines of the log:"
   tail -n 40 "$LOG"

@@ -89,3 +89,14 @@ exists. **Not proven:** the screens themselves have been checked by reading, not
 person using them; the first run on the real machine will show what needs polishing.
 Known limit: the disk-unlock prompt at start-up may use a US keyboard layout, which is why
 the setup advises letters and digits and always offers the recovery key.
+
+## No Ethernet? (the owner's room has none)
+- Choose **Wi-Fi** in step 2 of the setup (it is the default when no cable is found). The
+  Mac mini's Broadcom BCM4331 uses the proprietary `wl` driver built into the image; CI
+  records that the module matches the image kernel, knows the chip (14e4:4331) and has its
+  dependencies. It has **not** been seen working on the real chip yet. If no Wi-Fi adapter
+  appears, the setup shows the last kernel messages about it: send those.
+- The language model normally downloads over the network (`sudo jarvis-model install`).
+  Without a network: download the file named in `jarvis-model` on another computer, copy it
+  to a USB stick as `model.gguf`, plug the stick in and run `sudo jarvis-model install-usb`.
+  The file is checked against the same pinned SHA-256 first.

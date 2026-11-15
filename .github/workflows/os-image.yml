@@ -157,6 +157,9 @@ jobs:
           grep -E '^Package: (gcc|g\+\+|cpp|make|dkms|linux-headers|broadcom-sta|libc6-dev|binutils|firmware)' inspect/dpkg-status.txt | sort -u > inspect/leftovers.txt || true
           MSG=$( { echo "installed size in KB, then package (top 20):"; cat inspect/largest.txt; echo "build tools and firmware packages present:"; cat inspect/leftovers.txt; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=largest packages in the image::$MSG"
+          unsquashfs -cat inspect/fs.squashfs usr/share/jarvis/wifi-driver.txt > inspect/wifi.txt 2> /dev/null || echo "wifi-driver.txt is missing: the wl driver was not built" > inspect/wifi.txt
+          WMSG=$(sed 's/%/%25/g' inspect/wifi.txt | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=Wi-Fi driver in the image (the machine has no Ethernet, so this matters)::$WMSG"
 
       - name: Install QEMU and firmware
         run: |
