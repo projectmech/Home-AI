@@ -34,5 +34,7 @@ else
   echo "wifi hook: WARNING: the wl module was not built. Last lines of the log:"
   tail -n 40 "$LOG"
 fi
+# Whatever the purge left behind: headers, sources and DKMS state are not needed at run time.
+rm -rf /usr/src/linux-headers-* /usr/src/broadcom-sta* /var/lib/dkms /var/cache/apt/archives/*.deb
 rm -rf /tmp/wl "$LOG"
 exit 0

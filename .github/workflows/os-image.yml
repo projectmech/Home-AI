@@ -146,6 +146,15 @@ jobs:
           if [ "$fail" = 0 ]; then echo "::warning title=ISO inspection: all required present, nothing forbidden::$MSG"; else echo "::error title=ISO inspection FAILED::$MSG"; fi
           exit "$fail"
 
+      - name: Show the largest packages and any build tools left in the image
+        if: always()
+        run: |
+          [ -f inspect/dpkg-status.txt ] || exit 0
+          awk '/^Package:/ {p=$2} /^Installed-Size:/ {print $2, p}' inspect/dpkg-status.txt | sort -rn | head -n 20 > inspect/largest.txt
+          grep -E '^Package: (gcc|g\+\+|cpp|make|dkms|linux-headers|broadcom-sta|libc6-dev|binutils|firmware)' inspect/dpkg-status.txt | sort -u > inspect/leftovers.txt || true
+          MSG=$( { echo "installed size in KB, then package (top 20):"; cat inspect/largest.txt; echo "build tools and firmware packages present:"; cat inspect/leftovers.txt; } | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=largest packages in the image::$MSG"
+
       - name: Install QEMU and firmware
         run: |
           sudo apt-get update
