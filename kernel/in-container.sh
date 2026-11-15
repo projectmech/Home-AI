@@ -3,8 +3,10 @@
 #   /src = the repository (read only), /out = where the .deb files go.
 #
 # 1. picks the newest 6.12 long-term kernel from kernel.org (or $KERNEL_VERSION),
-# 2. verifies the source: the signed sha256sums.asc (kernel.org's maintainers' keys)
-#    and then the tarball's hash against it,
+# 2. verifies the source: the release manager's detached OpenPGP signature over the
+#    tarball (Linus, Greg, Sasha Levin or Ben Hutchings, by fingerprint, as listed on
+#    kernel.org/category/signatures.html), then the tarball's hash against kernel.org's
+#    sha256sums.asc (that file is only a mirror cross-check, signed by an autosigner),
 # 3. configures it (x86_64_defconfig + kernel/jarvis.config), checks every option in
 #    kernel/required.txt really ended up set, and reports options that were dropped,
 # 4. builds linux-image, linux-headers and linux-libc-dev packages.
@@ -33,26 +35,34 @@ fi
 BASE=https://cdn.kernel.org/pub/linux/kernel/v6.x
 curl -fsSLO --retry 3 "$BASE/linux-$VER.tar.xz"
 curl -fsSLO --retry 3 "$BASE/sha256sums.asc"
+curl -fsSLO --retry 3 "$BASE/linux-$VER.tar.sign"
 
 # ---- verify the source ---------------------------------------------------------------------
+# The release manager signs the UNCOMPRESSED tar, so the .xz is decompressed into gpg.
+# (sha256sums.asc is signed by a kernel.org autosigner key whose purpose, per kernel.org,
+# is only to compare mirrors with the master copy, "NOT intended to replace developer
+# signatures". It is used below for that cross-check, not as the trust anchor.)
 export GNUPGHOME
 GNUPGHOME=$(mktemp -d)
 SIG="NOT verified"
-# The only keys whose signature is accepted (kernel.org lists these fingerprints):
+# The only keys whose signature is accepted (kernel.org/category/signatures.html lists these):
 #   Linus Torvalds       ABAF 11C6 5A29 70B1 30AB  E3C4 79BE 3E43 0041 1886
 #   Greg Kroah-Hartman   647F 2865 4894 E3BD 4571  99BE 38DB BDC8 6092 693E
-ALLOWED="ABAF11C65A2970B130ABE3C479BE3E4300411886 647F28654894E3BD457199BE38DBBDC86092693E"
+#   Sasha Levin          E27E 5D8A 3403 A2EF 6687  3BBC DEA6 6FF7 9777 2CDC
+#   Ben Hutchings        AC2B 29BD 34A6 AFDD B3F6  8F35 E7BF C8EC 9586 1109
+ALLOWED="ABAF11C65A2970B130ABE3C479BE3E4300411886 647F28654894E3BD457199BE38DBBDC86092693E E27E5D8A3403A2EF66873BBCDEA66FF797772CDC AC2B29BD34A6AFDDB3F68F35E7BFC8EC95861109"
 : > gpg-keys.log
 # Kernel.org's own web key directory first (it timed out from the CI network once),
-# then public key servers, by FINGERPRINT.
-timeout 60 gpg --batch --quiet --auto-key-locate wkd --locate-keys torvalds@kernel.org gregkh@kernel.org >> gpg-keys.log 2>&1 || true
+# then public key servers, by FINGERPRINT. Only a key with one of the fingerprints above can pass.
+timeout 60 gpg --batch --quiet --auto-key-locate wkd --locate-keys torvalds@kernel.org gregkh@kernel.org sashal@kernel.org >> gpg-keys.log 2>&1 || true
 for server in hkps://keys.openpgp.org hkps://keyserver.ubuntu.com; do
   for fpr in $ALLOWED; do
     gpg --batch --list-keys "$fpr" > /dev/null 2>&1 \
       || timeout 60 gpg --batch --keyserver "$server" --recv-keys "$fpr" >> gpg-keys.log 2>&1 || true
   done
 done
-if gpg --batch --status-fd 1 --verify sha256sums.asc > gpg-verify.log 2> gpg-verify.err; then
+if xz -cd "linux-$VER.tar.xz" | gpg --batch --status-fd 1 --verify "linux-$VER.tar.sign" - > gpg-verify.log 2> gpg-verify.err; then
+  # The last field of VALIDSIG is the fingerprint of the signer's PRIMARY key.
   SIGNER=$(awk '/VALIDSIG/ {print $NF}' gpg-verify.log | head -n 1)
   case " $ALLOWED " in
     *" $SIGNER "*) SIG="verified: good signature by key $SIGNER" ;;
@@ -67,7 +77,7 @@ fi
 grep "  linux-$VER.tar.xz\$" sha256sums.asc > want.sha
 [ -s want.sha ] || { warn "kernel build" "linux-$VER.tar.xz is not in sha256sums.asc"; exit 1; }
 sha256sum -c want.sha
-note "kernel source" "linux-$VER.tar.xz sha256 $(cut -d' ' -f1 want.sha); sums file signature $SIG"
+note "kernel source" "linux-$VER.tar.xz sha256 $(cut -d' ' -f1 want.sha) (matches kernel.org's sha256sums.asc); tarball signature $SIG"
 
 tar -xf "linux-$VER.tar.xz"
 cd "linux-$VER"

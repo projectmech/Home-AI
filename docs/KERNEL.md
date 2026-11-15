@@ -30,8 +30,11 @@ not a realistic task.
 
 ## Build and checks
 `kernel/build.sh` (docker) or the **Kernel** workflow: picks the newest 6.12 long-term
-kernel, verifies kernel.org's **signed** `sha256sums.asc` and then the tarball, merges the
-config, fails if any option in `kernel/required.txt` did not end up set, reports options
+kernel, verifies the release manager's **detached OpenPGP signature** over the tarball
+(accepted only from Linus Torvalds, Greg Kroah-Hartman, Sasha Levin or Ben Hutchings, by the
+fingerprints on kernel.org/category/signatures.html) and cross-checks the hash against
+kernel.org's `sha256sums.asc` (which kernel.org says is a mirror check, not a developer
+signature), merges the config, fails if any option in `kernel/required.txt` did not end up set, reports options
 that dependency resolution dropped, and builds `linux-image`, `linux-headers` and
 `linux-libc-dev`.
 
