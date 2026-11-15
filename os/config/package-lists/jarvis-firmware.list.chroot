@@ -1,0 +1,5 @@
+# Firmware: live-build no longer installs every firmware package (about 700 MB of
+# network, graphics and sound firmware for hardware the Mac mini does not have).
+# Only what this machine can use: Broadcom (Wi-Fi and Bluetooth) firmware and CPU microcode.
+firmware-brcm80211
+intel-microcode

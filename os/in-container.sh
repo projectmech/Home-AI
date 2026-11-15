@@ -26,6 +26,8 @@ lb config \
   --linux-flavours amd64 \
   --archive-areas "main contrib non-free non-free-firmware" \
   --apt-recommends false \
+  --firmware-chroot false \
+  --firmware-binary false \
   --binary-images iso-hybrid \
   --debian-installer none \
   --memtest none \
