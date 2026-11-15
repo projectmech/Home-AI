@@ -44,7 +44,11 @@ if [ -n "$WL" ]; then
     modinfo -k "$KVER" wl 2>&1 | grep -E '^(version|vermagic|depends|license):' | sed 's/  */ /g'
     # wl matches Broadcom network devices by vendor and class (pci:v000014E4d*sv*sd*bc02sc80), not by
     # one device id per chip, so the BCM4331 shows up as the wildcard alias, not as d00004331.
-    echo "aliases matching Broadcom network devices incl. the BCM4331 (14e4:4331): $(modinfo -k "$KVER" -F alias wl 2> /dev/null | grep -ciE 'v000014E4d(00004331|\*)') match(es)"
+    ALIASES=$(modinfo -k "$KVER" -F alias wl 2> /dev/null)
+    echo "aliases in the module: $(printf '%s\n' "$ALIASES" | grep -c .); first ones: $(printf '%s\n' "$ALIASES" | head -n 3 | tr '\n' ' ')"
+    echo "aliases matching Broadcom network devices incl. the BCM4331 (14e4:4331): $(printf '%s\n' "$ALIASES" | grep -ciE 'v000014E4d(00004331|\*)') match(es)"
+    # With no usable alias nothing would load wl by itself, so the image ships a udev rule that does.
+    if [ -f /etc/udev/rules.d/90-jarvis-wifi.rules ]; then echo "udev rule that loads wl for Broadcom wireless chips: present"; else echo "udev rule that loads wl: MISSING"; fi
     for dep in $(modinfo -k "$KVER" -F depends wl 2> /dev/null | tr ',' ' '); do
       if find "/lib/modules/$KVER" -name "$dep.ko*" | grep -q .; then echo "dependency $dep: present"; else echo "dependency $dep: MISSING (or built into the kernel)"; fi
     done

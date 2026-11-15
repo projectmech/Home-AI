@@ -272,6 +272,7 @@ case "$FIRSTBOOT" in
     waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: (DONE|FAIL)' 300 "the first-start setup to finish"
     has 'JARVIS-FIRSTBOOT: DONE' "$CURLOG" || fail "the first-start setup failed"
     has 'JARVIS-FIRSTBOOT: administrator created' "$CURLOG" || fail "the first-start setup did not create the administrator"
+    has 'JARVIS-FIRSTBOOT: dns ok' "$CURLOG" || fail "name lookups (DNS) do not work in the installed system"
     HEALTH=$(curl -sk --max-time 10 "https://127.0.0.1:$PORT/api/health" || true)
     grep -q '"setup_required":false' <<< "$HEALTH" || fail "setup should be closed after the first-start setup made the administrator: $HEALTH"
     LOGIN_USER=$FBUSER; LOGIN_PW=$FBPW
@@ -293,6 +294,7 @@ case "$FIRSTBOOT" in
   *)
     waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: (DONE|FAIL)' 300 "the first-start setup to finish"
     has 'JARVIS-FIRSTBOOT: DONE' "$CURLOG" || fail "the first-start setup failed"
+    has 'JARVIS-FIRSTBOOT: dns ok' "$CURLOG" || fail "name lookups (DNS) do not work in the installed system"
     ;;
 esac
 if [ "$FIRSTBOOT" != admin ]; then

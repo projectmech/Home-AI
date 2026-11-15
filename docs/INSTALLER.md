@@ -96,6 +96,14 @@ the setup advises letters and digits and always offers the recovery key.
   records that the module matches the image kernel, knows the chip (14e4:4331) and has its
   dependencies. It has **not** been seen working on the real chip yet. If no Wi-Fi adapter
   appears, the setup shows the last kernel messages about it: send those.
+- **Fixed 2026-11-15:** a Wi-Fi network chosen in the installer did not come back after the
+  installation, because nothing loaded the `wl` driver when the installed system started (only
+  the installer's own screen did, by hand). A udev rule (`90-jarvis-wifi.rules`) now loads `wl`
+  for any Broadcom wireless chip at every start. Name lookups (DNS) also did not work after
+  installation (no resolver in the image, so the model download could not find its server);
+  `systemd-resolved` is now installed and CI checks that a name resolves on the installed
+  system. If the address on the login screen cannot be opened from another computer, the
+  login screen now says whether the Wi-Fi driver is running; `sudo jarvis-wifi status` shows more.
 - The language model normally downloads over the network (`sudo jarvis-model install`).
   Without a network: download the file named in `jarvis-model` on another computer, copy it
   to a USB stick as `model.gguf`, plug the stick in and run `sudo jarvis-model install-usb`.

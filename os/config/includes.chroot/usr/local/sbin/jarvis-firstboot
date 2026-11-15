@@ -309,6 +309,13 @@ auto_run() {
     else kmsg "JARVIS-FIRSTBOOT: FAIL (administrator: $ADMIN_ERR)"; return 1; fi
     refresh_banner
   fi
+  # Name lookups (DNS) must work: the model download needs them. Reported for the test.
+  local i=0 dns=FAILED
+  while [ "$i" -lt 30 ]; do
+    if getent hosts deb.debian.org > /dev/null 2>&1; then dns=ok; break; fi
+    i=$((i + 1)); sleep 1
+  done
+  kmsg "JARVIS-FIRSTBOOT: dns $dns"
   mark_done
   kmsg "JARVIS-FIRSTBOOT: DONE"
   return 0

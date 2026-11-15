@@ -3,3 +3,6 @@ wpasupplicant
 iw
 rfkill
 wireless-regdb
+# Name lookups (DNS) from the addresses the router hands out: systemd-networkd does not
+# write /etc/resolv.conf by itself, so without this the model download cannot find its server.
+systemd-resolved

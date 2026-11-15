@@ -1,0 +1,11 @@
+# Load the proprietary wl driver for the Mac mini's Wi-Fi chip.
+#
+# The open-source drivers that would claim a Broadcom wireless chip are blacklisted
+# (/etc/modprobe.d/jarvis-wifi.conf), and the wl module is not reliably found by the
+# usual module-alias lookup (the image build's record found no alias for the chip), so
+# without this rule nothing loads it, there is no wireless interface, and the saved
+# Wi-Fi network never comes up after the installation.
+#
+# Any Broadcom (14e4) PCI "network controller" (class 0x0280xx) gets wl. The chip in
+# the owner's Mac mini 5,1 is 14e4:4331.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x14e4", ATTR{class}=="0x0280??", RUN+="/sbin/modprobe wl"

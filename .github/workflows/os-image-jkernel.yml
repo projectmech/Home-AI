@@ -88,6 +88,8 @@ jobs:
           need 'usr/local/sbin/jarvis-firstboot$' 'first-start setup'
           need 'etc/systemd/system/jarvis-firstboot\.service$' 'first-start setup unit'
           need '(sbin|bin)/chvt$' 'chvt (the first-start setup has its own virtual console)'
+          need 'etc/udev/rules\.d/90-jarvis-wifi\.rules$' 'udev rule that loads the wl Wi-Fi driver at start'
+          need 'systemd/systemd-resolved$' 'DNS (systemd-resolved)'
           need 'usr/local/bin/llama-server$' 'model server'
           need '(sbin|bin)/plymouthd$' 'Plymouth (boot screen)'
           need 'plymouth/script\.so$' 'Plymouth script module'

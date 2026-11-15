@@ -41,7 +41,7 @@ if [ -r /var/log/plymouth-debug.log ]; then
   tail -n 22 /var/log/plymouth-debug.log | while IFS= read -r l; do dbg "plog-tail: $(printf '%s' "$l" | cut -c1-230)"; done
 fi
 journalctl -b -u plymouth-start.service --no-pager 2>/dev/null | tail -n 4 | while IFS= read -r l; do dbg "plog: unit: $l"; done
-[ -n "$IP" ] || IP="(no address yet - is the network cable plugged in?)"
+[ -n "$IP" ] || IP="(no address yet: plug in a cable, or join Wi-Fi: sudo jarvis-wifi connect NAME)"
 [ -n "$TOKEN" ] || TOKEN="(none - setup is already complete)"
 [ -n "$FP" ] || FP="(unavailable)"
 
@@ -68,6 +68,13 @@ while IFS= read -r line; do
  Hardware:    $line"
 done < /tmp/pci-net.txt
 rm -f /tmp/pci-net.txt
+# A Broadcom wireless chip is in the computer but no wireless interface exists: its driver is
+# not running, so no Wi-Fi network can come up. Say so on the screen.
+if printf '%s' "$NETINFO" | grep -qi 'Hardware:.*Network controller.*\[14e4:' \
+  && ! printf '%s' "$NETINFO" | grep -qE 'Network: +(wl|wlan)'; then
+  NETINFO="$NETINFO
+ Wi-Fi:       the chip is there but its driver is not running. Log in, then: sudo modprobe wl"
+fi
 dbg "net:$(printf '%s' "$NETINFO" | tr '\n' ' ')"
 
 if [ -d /run/live ]; then
