@@ -92,5 +92,6 @@ case "${1:-status}" in
   status) status ;;
   install) install_model ;;
   install-usb) install_usb ;;
-  *) echo "usage: jarvis-model status | install | install-usb" >&2; exit 2 ;;
+  url) echo "$MODEL_URL" ;;
+  *) echo "usage: jarvis-model status | install | install-usb | url" >&2; exit 2 ;;
 esac

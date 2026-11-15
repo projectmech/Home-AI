@@ -100,3 +100,39 @@ the setup advises letters and digits and always offers the recovery key.
   Without a network: download the file named in `jarvis-model` on another computer, copy it
   to a USB stick as `model.gguf`, plug the stick in and run `sudo jarvis-model install-usb`.
   The file is checked against the same pinned SHA-256 first.
+
+## The first-start setup (added 2026-11-15)
+The USB stick only installs. The installed system then has its own short setup, on its own
+screen, on its first start (`jarvis-firstboot`, started by `jarvis-firstboot.service`). It
+opens after you have typed the disk passphrase and the system is up, on the eighth virtual
+console, so the login prompt on the first one is never fought over; when it ends (or you
+choose **Later**) the screen switches to the login prompt and the address box.
+
+The installer already did the keyboard, the disk, your account, the computer name and the
+Wi-Fi network. What is left, as a list you can do in any order (every line is optional):
+
+1. **Network**: shows the connection (cable or Wi-Fi with its address), checks the cable
+   again, or joins a Wi-Fi network (the same Wi-Fi screens as the installer, one copy of the code).
+2. **Dashboard administrator**: the web dashboard has its own sign-in, separate from your
+   account on the computer. You choose its user name and password (12+ characters) here, so
+   no second computer is needed. It uses the same one-time setup token and the same
+   `/api/setup` endpoint as the web setup; nothing is bypassed, and the password goes to the
+   server on standard input, never on a command line.
+3. **AI assistant**: downloads the language model (about 1 GB, checked against its pinned
+   SHA-256), or installs it from a USB stick holding `model.gguf` (the room with no
+   Ethernet). It shows the address to download the file from.
+4. **Finish** marks it done, shows the dashboard address and certificate fingerprint, and
+   refreshes the login screen. Finishing without an administrator asks first.
+
+Until you choose Finish it comes back at every start; **Later** postpones it. Open it again
+any time with `sudo jarvis-firstboot`. `jarvis.firstboot=off` on the kernel command line
+disables it.
+
+**What CI proves** (os/test-install.sh, `FIRSTBOOT` variants): with `screen`, the real setup
+opens on the eighth virtual console, something is drawn on the virtual screen (an ASCII
+rendering is attached to the run) and, being unfinished, it comes back at the second start;
+with `admin`, it creates the dashboard administrator by itself, that administrator can sign
+in after a reboot and the setup does not come back. The unattended modes
+(`jarvis.install.firstboot=`, `.fbadmin`, `.fbadminpass`) exist only for these tests.
+**Not proven:** the screens have not been used by a person, on the real Mac mini's console, or
+with the real Wi-Fi chip; the download of the model has not run in CI (1 GB).

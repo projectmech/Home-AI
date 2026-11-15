@@ -1,0 +1,333 @@
+#!/bin/bash
+# JARVIS OS first-start setup. It runs ONCE, on the first start of an installed
+# system (jarvis-firstboot.service, on its own screen), and can be run again at any
+# time:   sudo jarvis-firstboot
+#
+# The installer already did the disk, your account, the computer name, the keyboard
+# and (if you chose it) the Wi-Fi network. What is left, and what this asks about:
+#
+#   Network                   check the connection, join a Wi-Fi network
+#   Dashboard administrator   the sign-in for the web dashboard. It is made here, on
+#                             this screen, so no second computer is needed
+#   AI assistant              download the language model, or install it from a USB
+#                             stick (for a room with no Ethernet)
+#
+# Every part is optional. "Finish" marks the setup as done; until then it comes back
+# at each start. Nothing here changes the disk or the account.
+#
+# Test-only mode: if /var/lib/jarvis/firstboot-auto exists (the installer writes it
+# for the unattended CI install), no screen is shown; the file's answers are applied
+# and the result is reported on the kernel log.
+set -u
+export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export TERM=${TERM:-linux}
+# Cyan on black, like the boot screen and the installer.
+export NEWT_COLORS='root=,black window=,black border=cyan,black title=cyan,black shadow=,black
+button=black,cyan actbutton=black,white compactbutton=cyan,black checkbox=cyan,black actcheckbox=black,cyan
+entry=cyan,black label=cyan,black listbox=cyan,black actlistbox=black,cyan sellistbox=black,cyan
+actsellistbox=black,cyan textbox=cyan,black acttextbox=black,cyan helpline=cyan,black roottext=cyan,black
+emptyscale=,black fullscale=,cyan disentry=gray,black'
+
+BT="JARVIS OS first-start setup"
+STATE=/var/lib/jarvis
+DONE=$STATE/firstboot-done
+AUTOFILE=$STATE/firstboot-auto
+CERT=/var/lib/home-ai/tls/cert.pem
+API=https://localhost:8443
+MODEL=/var/lib/jarvis-model/model.gguf
+ADMIN_ERR=""
+NETMODE="" NETINFO=""
+
+kmsg() { printf 'jarvis-firstboot: %s\n' "$*" > /dev/kmsg 2> /dev/null || true; }
+# whiptail prints its answer on stderr; capture it on stdout.
+T()   { whiptail --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+msg() { whiptail --backtitle "$BT" --title "${2:-JARVIS OS}" --msgbox "$1" "${3:-12}" 70; }
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root: sudo jarvis-firstboot" >&2; exit 1; }
+sysctl -q -w kernel.printk_devkmsg=on 2> /dev/null || true
+install -d -m 0755 "$STATE"
+# The Wi-Fi screens are the installer's (one copy of the code).
+# shellcheck source=/dev/null
+. /usr/local/lib/jarvis/netui.sh
+
+# ---- helpers ----------------------------------------------------------------------
+healthy() { curl -sf --max-time 3 --cacert "$CERT" "$API/api/health" > /dev/null 2>&1; }
+setup_open() { curl -s --max-time 5 --cacert "$CERT" "$API/api/health" 2> /dev/null | grep -q '"setup_required":true'; }
+wait_healthy() { # <seconds>
+  local i=0
+  while [ "$i" -lt "$1" ]; do
+    healthy && return 0
+    i=$((i + 1)); sleep 1
+  done
+  return 1
+}
+json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+online() {
+  local w
+  [ -n "$(wired_ip)" ] && return 0
+  w=$(wifi_if)
+  [ -n "$w" ] && [ -n "$(ipv4_of "$w")" ]
+}
+
+# Creates the dashboard administrator through the same one-time-token endpoint the
+# web setup uses; nothing is bypassed. On failure ADMIN_ERR says why.
+create_admin() { # <user> <password>
+  local user=$1 pass=$2 try tok body resp code detail
+  ADMIN_ERR=""
+  resp=$(mktemp)
+  for try in 1 2 3; do
+    tok=$(/usr/local/bin/home-ai setup-token 2> /dev/null | grep -Eo '[0-9a-f]{64}' | head -n 1)
+    if [ -z "$tok" ]; then ADMIN_ERR="no setup token could be issued (the setup may already be complete)"; break; fi
+    body=$(printf '{"setup_token":"%s","username":"%s","password":"%s"}' "$tok" "$(json_str "$user")" "$(json_str "$pass")")
+    # The password goes in on standard input, never on a command line.
+    code=$(printf '%s' "$body" | curl -s --max-time 40 --cacert "$CERT" -o "$resp" -w '%{http_code}' -X POST \
+      -H 'content-type: application/json' --data-binary @- "$API/api/setup" 2> /dev/null) || code=000
+    body=""
+    case "$code" in
+      201) rm -f "$resp"; return 0 ;;
+      # Another program (the console banner) issued a newer token meanwhile: ask again.
+      403) ADMIN_ERR="the setup token was refused"; sleep 2 ;;
+      409) ADMIN_ERR="an administrator already exists"; break ;;
+      429) ADMIN_ERR="too many attempts: wait a few minutes and try again"; break ;;
+      400) detail=$(head -c 300 "$resp" | tr -d '\n'); ADMIN_ERR="the server did not accept it: $detail"; break ;;
+      *) ADMIN_ERR="the server answered HTTP $code"; break ;;
+    esac
+  done
+  rm -f "$resp"
+  return 1
+}
+
+net_status() {
+  local ip ifw ssid
+  ip=$(wired_ip)
+  if [ -n "$ip" ]; then printf 'cable (%s)' "$ip"; return; fi
+  ifw=$(wifi_if)
+  if [ -n "$ifw" ]; then
+    ip=$(ipv4_of "$ifw")
+    if [ -n "$ip" ]; then
+      ssid=$(iw dev "$ifw" link 2> /dev/null | sed -n 's/^[[:space:]]*SSID: //p' | head -n 1)
+      printf 'Wi-Fi "%s" (%s)' "${ssid:-?}" "$ip"
+      return
+    fi
+  fi
+  printf 'not connected'
+}
+admin_status() { if ! healthy; then printf 'service not ready'; elif setup_open; then printf 'not created yet'; else printf 'created'; fi; }
+ai_status() { if [ -s "$MODEL" ]; then printf 'installed'; else printf 'not installed'; fi; }
+
+mark_done() { : > "$DONE"; chmod 0644 "$DONE"; }
+# Rewrites the address box on the login screen and /etc/issue.d (the setup token in it
+# changes once an administrator exists). A short wait: the network is as up as it will be.
+refresh_banner() { JARVIS_BANNER_WAIT=5 /usr/local/lib/jarvis/banner.sh > /dev/null 2>&1 || true; }
+
+# Runs a command with its output on the screen (a download shows its progress), then waits.
+run_visible() {
+  local rc
+  clear
+  "$@"
+  rc=$?
+  echo
+  read -r -p "Press Enter to continue. " _ || true
+  return "$rc"
+}
+
+# ---- the screens ------------------------------------------------------------------
+welcome() {
+  whiptail --backtitle "$BT" --title "Welcome to JARVIS OS" --yes-button "Start" --no-button "Later" --yesno \
+"JARVIS OS is installed on this computer and its disk is unlocked.
+
+A few things are left. Each one is optional and you can do them in any
+order:
+
+  Network                   check the connection, join a Wi-Fi network
+  Dashboard administrator   the sign-in for JARVIS's web dashboard
+  AI assistant              install the local language model
+
+Later: this screen comes back at the next start. You can also open it any
+time with:   sudo jarvis-firstboot" 18 74
+}
+
+network_screen() {
+  local opt ip
+  while :; do
+    opt=$(T --title "Network" --ok-button "Choose" --cancel-button "Back" --menu \
+"Now: $(net_status)
+Wi-Fi adapter: $([ -n "$(wifi_if)" ] && echo found || echo 'not started yet')
+
+JARVIS is reached from your other devices over the network." 18 70 3 \
+      wired "Use the Ethernet cable (check it again)" \
+      wifi "Connect to a Wi-Fi network" \
+      back "Back") || return 0
+    case "$opt" in
+      wired)
+        ip=$(wired_ip)
+        if [ -n "$ip" ]; then msg "Connected by cable.\n\nThis computer's address: $ip" "Network" 9
+        else msg "No cable connection was found.\n\nPlug the Ethernet cable into the router, wait a few seconds and try again, or choose Wi-Fi." "Network" 10; fi
+        ;;
+      wifi) wifi_flow ;;
+      back) return 0 ;;
+    esac
+  done
+}
+
+admin_screen() {
+  local u p1 p2 def
+  whiptail --backtitle "$BT" --title "Dashboard administrator" --infobox "Checking that JARVIS is running..." 6 50
+  if ! wait_healthy 60; then
+    msg "The JARVIS service is not answering yet.\n\nWait a minute and try again. If it keeps failing, restart the computer, or look at:  sudo journalctl -u home-ai" "Dashboard administrator" 11
+    return
+  fi
+  if ! setup_open; then
+    msg "The dashboard already has an administrator, so nothing is needed here.\n\nOpen the dashboard from another computer on the network and sign in." "Dashboard administrator" 10
+    return
+  fi
+  msg "The web dashboard has its own sign-in, separate from the account you use on this computer.\n\nChoose the user name and password of its administrator now. The password needs at least 12 characters." "Dashboard administrator" 12
+  def=$(getent passwd 1000 | cut -d: -f1)
+  [ -n "$def" ] || def=admin
+  while :; do
+    u=$(T --title "Dashboard administrator" --ok-button "Next" --cancel-button "Back" --inputbox \
+      "User name for the dashboard (3 to 64 characters: letters, digits and  . _ - @):" 10 70 "${u:-$def}") || return
+    if [[ "$u" =~ ^[A-Za-z0-9._@-]{3,64}$ ]]; then break; fi
+    msg "That user name is not allowed. Use 3 to 64 letters, digits or . _ - @" "User name" 8
+  done
+  while :; do
+    p1=$(T --title "Password for $u" --passwordbox "Password for the dashboard (at least 12 characters):" 9 66 "") || return
+    p2=$(T --title "Password for $u" --passwordbox "Type it again:" 9 66 "") || return
+    if [ "${#p1}" -lt 12 ]; then msg "Too short: at least 12 characters." "Password" 7; continue; fi
+    if [ "$p1" != "$p2" ]; then msg "They do not match." "Password" 7; continue; fi
+    break
+  done
+  whiptail --backtitle "$BT" --title "Dashboard administrator" --infobox "Creating the administrator..." 6 50
+  if create_admin "$u" "$p1"; then
+    kmsg "JARVIS-FIRSTBOOT: administrator created"
+    msg "The administrator \"$u\" was created.\n\nOpen the dashboard from another computer and sign in with this user name and password." "Dashboard administrator" 10
+  else
+    msg "The administrator could not be created:\n\n$ADMIN_ERR" "Dashboard administrator" 11
+  fi
+}
+
+ai_screen() {
+  local opt url
+  if [ -s "$MODEL" ]; then
+    msg "The language model is already installed." "AI assistant" 7
+    return
+  fi
+  while :; do
+    opt=$(T --title "AI assistant" --ok-button "Choose" --cancel-button "Back" --menu \
+"The assistant answers in plain words and can propose commands for your devices. It runs only on this computer. Its language model (about 1 GB) is not part of the system image.
+
+Everything JARVIS controls by voice or text works without it." 20 76 3 \
+      download "Download it now (needs the network)" \
+      usb "Install it from a USB stick (a file named model.gguf)" \
+      back "Not now") || return
+    case "$opt" in
+      download)
+        if ! online; then
+          msg "There is no network connection yet.\n\nSet up the network first (Back, then Network), or use a USB stick." "AI assistant" 10
+          continue
+        fi
+        run_visible jarvis-model install
+        if [ -s "$MODEL" ]; then return; fi
+        msg "The model was not installed. Check the messages above, the network and the free disk space, then try again." "AI assistant" 9
+        ;;
+      usb)
+        url=$(jarvis-model url 2> /dev/null)
+        msg "No network? On another computer, download this file:\n\n$url\n\nCopy it to a USB stick and name it  model.gguf  . Plug the stick into this computer, then choose OK. The file is checked against a fixed SHA-256 before it is used." "AI assistant" 17
+        run_visible jarvis-model install-usb
+        if [ -s "$MODEL" ]; then return; fi
+        msg "The model was not installed. Check the messages above and that the file is the right one, then try again." "AI assistant" 9
+        ;;
+      back) return ;;
+    esac
+  done
+}
+
+# Returns 0 when the setup is finished, 1 to go back to the list.
+finish() {
+  local ip fp
+  if setup_open; then
+    whiptail --backtitle "$BT" --title "No administrator yet" --yes-button "Finish anyway" --no-button "Back" --yesno \
+"The dashboard has no administrator yet, so nobody can sign in to it.
+
+You can still create one later: another computer on the network can open the dashboard and use the setup token on this computer's login screen, or run:  sudo home-ai setup-token" 13 74 || return 1
+  fi
+  mark_done
+  kmsg "JARVIS-FIRSTBOOT: DONE"
+  refresh_banner
+  ip=$(wired_ip)
+  [ -n "$ip" ] || ip=$(ipv4_of "$(wifi_if)")
+  [ -n "$ip" ] || ip="(no address yet)"
+  fp=$(/usr/local/bin/home-ai tls-fingerprint 2> /dev/null)
+  [ -n "$fp" ] || fp="(unavailable)"
+  msg "All set.
+
+Dashboard:  https://$ip:8443
+            https://$(hostname).local:8443
+Certificate SHA-256 (compare it with the one in the browser warning):
+  $fp
+
+Open it from another computer on the same network. The certificate is self-signed, so the browser warns: continue only if its fingerprint is identical to the one above.
+
+Next comes the login screen of this computer." "Done" 22
+  return 0
+}
+
+hub() {
+  local opt next
+  while :; do
+    if ! online; then next=net
+    elif setup_open; then next=admin
+    elif [ ! -s "$MODEL" ]; then next=ai
+    else next=done; fi
+    opt=$(T --title "Finish setting up" --default-item "$next" --ok-button "Open" --cancel-button "Later" --menu \
+"Choose a line to work on it. When you are happy, choose Finish.
+
+Later: leave now. This screen comes back at the next start." 19 76 4 \
+      net "Network:  $(net_status)" \
+      admin "Dashboard administrator:  $(admin_status)" \
+      ai "AI assistant:  $(ai_status)" \
+      done "Finish") || return 1
+    case "$opt" in
+      net) network_screen ;;
+      admin) admin_screen ;;
+      ai) ai_screen ;;
+      done) finish && return 0 ;;
+    esac
+  done
+}
+
+# ---- test-only automatic mode ------------------------------------------------------
+auto_run() {
+  local FB_AUTO="" FB_ADMIN="" FB_ADMINPASS=""
+  # shellcheck source=/dev/null
+  . "$AUTOFILE"
+  rm -f "$AUTOFILE"
+  kmsg "JARVIS-FIRSTBOOT: START (automatic, test only)"
+  if ! wait_healthy 240; then kmsg "JARVIS-FIRSTBOOT: FAIL (the JARVIS service did not come up)"; return 1; fi
+  if [ -n "$FB_ADMIN" ]; then
+    if create_admin "$FB_ADMIN" "$FB_ADMINPASS"; then kmsg "JARVIS-FIRSTBOOT: administrator created"
+    else kmsg "JARVIS-FIRSTBOOT: FAIL (administrator: $ADMIN_ERR)"; return 1; fi
+    refresh_banner
+  fi
+  mark_done
+  kmsg "JARVIS-FIRSTBOOT: DONE"
+  return 0
+}
+
+if [ -f "$AUTOFILE" ]; then
+  auto_run
+  exit $?
+fi
+
+kmsg "JARVIS-FIRSTBOOT: START (screen) tty=$(tty 2> /dev/null) vt=$(cat /sys/class/tty/tty0/active 2> /dev/null)"
+if ! welcome; then
+  kmsg "JARVIS-FIRSTBOOT: postponed at the welcome screen"
+  exit 0
+fi
+if ! hub; then
+  clear
+  echo "The setup was not finished. It comes back at the next start, or run:  sudo jarvis-firstboot"
+  kmsg "JARVIS-FIRSTBOOT: postponed"
+  sleep 3
+fi
+exit 0

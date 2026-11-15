@@ -29,6 +29,14 @@ TAG="$MODE-$UNLOCK${SPLASH:+-splash}"
 PORT=18443
 PASSPHRASE='jarvis-test-passphrase'
 ADMINPW='correct horse battery staple'
+# How the first-start setup (jarvis-firstboot) is exercised on the first start:
+#   auto    no screen; it just finishes (the token flow below creates the administrator)
+#   admin   no screen; it creates the dashboard administrator itself
+#   screen  the real screen: it must open on the eighth virtual console and draw something,
+#           and, being unfinished, must come back at the second start
+FIRSTBOOT=${FIRSTBOOT:-auto}
+FBUSER=fbadmin
+FBPW='first-boot-admin-pass'
 WORK=$(mktemp -d)
 DISK="$WORK/disk.qcow2"
 qemu-img create -q -f qcow2 "$DISK" 20G
@@ -117,6 +125,8 @@ xorriso -osirrox on -indev "$ISO" -extract /live/vmlinuz "$WORK/vmlinuz" -extrac
 CURLOG="install-$TAG-A.log"; : > "$CURLOG"
 APPEND="boot=live components hostname=jarvis nomodeset plymouth.enable=0 console=ttyS0,115200n8 jarvis.install=auto jarvis.install.disk=/dev/vda jarvis.install.erase=ERASE-/dev/vda jarvis.install.pass=$PASSPHRASE jarvis.install.user=tester jarvis.install.userpass=tester-password-1 jarvis.install.hostname=jarvis-test jarvis.install.keymap=us"
 [ -z "$SPLASH" ] || APPEND="$APPEND jarvis.install.splash=1"
+APPEND="$APPEND jarvis.install.firstboot=$FIRSTBOOT"
+[ "$FIRSTBOOT" != admin ] || APPEND="$APPEND jarvis.install.fbadmin=$FBUSER jarvis.install.fbadminpass=$FBPW"
 qemu-system-x86_64 "${COMMON[@]}" "${EFI[@]}" -serial "file:$CURLOG" \
   -kernel "$WORK/vmlinuz" -initrd "$WORK/initrd.img" -append "$APPEND" \
   -cdrom "$ISO" -drive "file=$DISK,if=virtio,format=qcow2" \
@@ -149,6 +159,15 @@ blue_pixels() { # <ppm>
       if ($1 + $2 + $3 > 450) { run++ } else { if (run >= 20) n += run; run = 0 }
       if (x == w - 1) { if (run >= 20) n += run; run = 0 } }
     END { if (run >= 20) n += run; print n + 0 }'
+}
+
+# Pixels that are not (nearly) black: a screen with a dialog on it has thousands.
+lit_pixels() { # <ppm>
+  local f=$1 hdr skip
+  [ -s "$f" ] || { echo 0; return; }
+  hdr=$(head -n 3 "$f")
+  skip=$(printf '%s\n' "$hdr" | wc -c)
+  tail -c +$((skip + 1)) "$f" | od -An -v -tu1 -w3 | awk '$1 + $2 + $3 > 60 { n++ } END { print n + 0 }'
 }
 
 # Type text through the virtual keyboard (the prompt is on the screen, not on
@@ -243,16 +262,48 @@ poweroff_vm() {
 }
 
 # --------------------------------------------- B. first boot: unlock, set up
-echo "== B. first boot: unlock with the passphrase, create the administrator"
+echo "== B. first boot: unlock with the passphrase, first-start setup ($FIRSTBOOT), create the administrator"
 boot_installed B "$PASSPHRASE"
 FP_B=$FP
-[ -n "$TOKEN" ] || fail "no setup token on the console of a fresh install"
-HEALTH=$(curl -sk --max-time 10 "https://127.0.0.1:$PORT/api/health" || true)
-grep -q '"setup_required":true' <<< "$HEALTH" || fail "setup should be open on a fresh install: $HEALTH"
-CODE=$(curl -sk --max-time 20 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
-  -d "{\"setup_token\":\"$TOKEN\",\"username\":\"admin\",\"password\":\"$ADMINPW\"}" "https://127.0.0.1:$PORT/api/setup" || true)
-[ "$CODE" = 201 ] || fail "creating the administrator failed (HTTP $CODE)"
-echo "administrator created; powering off"
+LOGIN_USER=admin; LOGIN_PW=$ADMINPW
+case "$FIRSTBOOT" in
+  admin)
+    # The first-start setup creates the administrator itself: no token is used from outside.
+    waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: (DONE|FAIL)' 300 "the first-start setup to finish"
+    has 'JARVIS-FIRSTBOOT: DONE' "$CURLOG" || fail "the first-start setup failed"
+    has 'JARVIS-FIRSTBOOT: administrator created' "$CURLOG" || fail "the first-start setup did not create the administrator"
+    HEALTH=$(curl -sk --max-time 10 "https://127.0.0.1:$PORT/api/health" || true)
+    grep -q '"setup_required":false' <<< "$HEALTH" || fail "setup should be closed after the first-start setup made the administrator: $HEALTH"
+    LOGIN_USER=$FBUSER; LOGIN_PW=$FBPW
+    echo "the first-start setup created the administrator"
+    ;;
+  screen)
+    # The real screen: it must open on the eighth virtual console (the login prompt stays
+    # on the first) and draw something. It is left at its welcome screen.
+    waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: START \(screen\)' 120 "the first-start setup screen to start"
+    has 'JARVIS-FIRSTBOOT: START \(screen\).*vt=tty8' "$CURLOG" || fail "the first-start setup did not take the eighth virtual console"
+    sleep 6
+    SHOT="install-$TAG-firstboot.ppm"
+    monitor "screendump $SHOT"; sleep 3
+    ann_text "the virtual screen of the first-start setup (ascii)" "$(ppm_ascii "$SHOT" 80 25)"
+    LIT=$(lit_pixels "$SHOT")
+    echo "first-start screen: $LIT lit pixels"
+    [ "$LIT" -gt 1500 ] || fail "the first-start setup drew nothing on the screen ($LIT lit pixels)"
+    ;;
+  *)
+    waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: (DONE|FAIL)' 300 "the first-start setup to finish"
+    has 'JARVIS-FIRSTBOOT: DONE' "$CURLOG" || fail "the first-start setup failed"
+    ;;
+esac
+if [ "$FIRSTBOOT" != admin ]; then
+  [ -n "$TOKEN" ] || fail "no setup token on the console of a fresh install"
+  HEALTH=$(curl -sk --max-time 10 "https://127.0.0.1:$PORT/api/health" || true)
+  grep -q '"setup_required":true' <<< "$HEALTH" || fail "setup should be open on a fresh install: $HEALTH"
+  CODE=$(curl -sk --max-time 20 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "{\"setup_token\":\"$TOKEN\",\"username\":\"admin\",\"password\":\"$ADMINPW\"}" "https://127.0.0.1:$PORT/api/setup" || true)
+  [ "$CODE" = 201 ] || fail "creating the administrator failed (HTTP $CODE)"
+  echo "administrator created; powering off"
+fi
 poweroff_vm
 
 # -------------------------------- C. second boot: unlock again, data persists
@@ -263,8 +314,16 @@ boot_installed C "$SECRET"
 HEALTH=$(curl -sk --max-time 10 "https://127.0.0.1:$PORT/api/health" || true)
 grep -q '"setup_required":false' <<< "$HEALTH" || fail "setup is open again after the reboot: $HEALTH"
 LOGIN=$(curl -sk --max-time 20 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
-  -d "{\"username\":\"admin\",\"password\":\"$ADMINPW\"}" "https://127.0.0.1:$PORT/api/login" || true)
+  -d "{\"username\":\"$LOGIN_USER\",\"password\":\"$LOGIN_PW\"}" "https://127.0.0.1:$PORT/api/login" || true)
 [ "$LOGIN" = 200 ] || fail "the administrator created before the reboot cannot sign in (HTTP $LOGIN)"
+# The first-start setup runs until it is finished, and only then stops coming back.
+if [ "$FIRSTBOOT" = screen ]; then
+  waitfor "$CURLOG" 'JARVIS-FIRSTBOOT: START \(screen\)' 120 "the unfinished first-start setup to come back at the next start"
+else
+  sleep 10
+  ! has 'JARVIS-FIRSTBOOT: START' "$CURLOG" || fail "the first-start setup ran again after it was finished"
+  echo "the first-start setup did not come back"
+fi
 poweroff_vm
 
 echo "RESULT: PASS (install + unlock with $UNLOCK + persistence, $MODE)"

@@ -85,6 +85,9 @@ jobs:
           need 'squashfs-root/opt/home-ai/bin/home-ai$' 'JARVIS core'
           need 'usr/local/sbin/jarvis-setup$' 'guided setup'
           need 'usr/local/sbin/jarvis-install$' 'installer'
+          need 'usr/local/sbin/jarvis-firstboot$' 'first-start setup'
+          need 'etc/systemd/system/jarvis-firstboot\.service$' 'first-start setup unit'
+          need '(sbin|bin)/chvt$' 'chvt (the first-start setup has its own virtual console)'
           need 'usr/local/bin/llama-server$' 'model server'
           need '(sbin|bin)/plymouthd$' 'Plymouth (boot screen)'
           need 'plymouth/script\.so$' 'Plymouth script module'
@@ -147,8 +150,10 @@ jobs:
         include:
           - mode: bios
             unlock: pass
+            firstboot: screen
           - mode: efi
             unlock: recovery
+            firstboot: admin
           - mode: efi
             unlock: pass
             splash: splash
@@ -165,7 +170,9 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
-      - name: Install test (${{ matrix.mode }}, unlock with ${{ matrix.unlock }} ${{ matrix.splash }})
+      - name: Install test (${{ matrix.mode }}, unlock with ${{ matrix.unlock }} ${{ matrix.splash }} ${{ matrix.firstboot }})
+        env:
+          FIRSTBOOT: ${{ matrix.firstboot }}
         run: bash os/test-install.sh out/jarvis-os-amd64.iso ${{ matrix.mode }} ${{ matrix.unlock }} ${{ matrix.splash }}
       - name: Keep the logs
         if: always()

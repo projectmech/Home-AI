@@ -17,8 +17,10 @@ dbg "started"
 ipv4() { ip -4 -o addr show scope global 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4; exit}'; }
 healthy() { curl -sf --max-time 3 --cacert /var/lib/home-ai/tls/cert.pem https://localhost:8443/api/health >/dev/null 2>&1; }
 
+# The first-start setup (jarvis-firstboot) runs this again when it finishes, with
+# JARVIS_BANNER_WAIT set to a few seconds, and then the login screen is cleared first.
 i=0
-while [ "$i" -lt 90 ]; do
+while [ "$i" -lt "${JARVIS_BANNER_WAIT:-90}" ]; do
   if healthy && [ -n "$(ipv4)" ]; then break; fi
   i=$((i + 1)); sleep 1
 done
@@ -102,6 +104,7 @@ EOF
 )
 
 printf '%s\n' "$TEXT" > "$ISSUE"
+if [ -n "${JARVIS_BANNER_WAIT:-}" ]; then printf '\033[2J\033[H' > /dev/tty1 2>/dev/null; fi
 printf '%s\n' "$TEXT" > /dev/tty1 2>/dev/null
 if [ -c /dev/ttyS0 ]; then printf '%s\n' "$TEXT" > /dev/ttyS0 2>/dev/null; fi
 exit 0

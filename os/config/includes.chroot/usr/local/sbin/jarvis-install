@@ -266,6 +266,27 @@ BOOT_UUID=$(blkid -s UUID -o value "$BOOTP")
 } > "$TARGET/etc/fstab"
 echo "$MAPNAME UUID=$ROOT_UUID none luks" > "$TARGET/etc/crypttab"
 echo "$HOSTNAME_NEW" > "$TARGET/etc/hostname"
+
+# The first-start setup (jarvis-firstboot) runs on the first start of the installed
+# system. Only the unattended CI install pre-answers it, so the test needs no screen:
+#   jarvis.install.firstboot=screen   no answers: the real screen opens (CI checks it)
+#   jarvis.install.firstboot=admin    also creates the dashboard administrator
+#                                     (jarvis.install.fbadmin, .fbadminpass)
+#   anything else                     applied with no administrator
+if [ "$AUTO" = 1 ]; then
+  FBMODE=$(cmdline_value jarvis.install.firstboot)
+  if [ "$FBMODE" != screen ]; then
+    install -d -m 0755 "$TARGET/var/lib/jarvis"
+    (
+      umask 077
+      echo "FB_AUTO=1"
+      if [ "$FBMODE" = admin ]; then
+        printf 'FB_ADMIN=%q\n' "$(cmdline_value jarvis.install.fbadmin)"
+        printf 'FB_ADMINPASS=%q\n' "$(cmdline_value jarvis.install.fbadminpass)"
+      fi
+    ) > "$TARGET/var/lib/jarvis/firstboot-auto"
+  fi
+fi
 printf '127.0.0.1 localhost\n127.0.1.1 %s\n' "$HOSTNAME_NEW" > "$TARGET/etc/hosts"
 if [ -n "$KEYMAP_KBD" ]; then
   # Console keyboard layout (systemd-vconsole-setup) and the XKB layout (the boot screen and anything else that reads it).
@@ -376,8 +397,9 @@ else
   log ""
   log "JARVIS OS is installed. Remove the installer USB stick, then restart."
   [ -z "$USERNAME" ] || log "You can sign in on this computer as: $USERNAME"
-  log "At start-up the computer asks for your passphrase. After that, the screen shows"
-  log "the address and a setup token: open the address from another computer."
+  log "At start-up the computer asks for your passphrase. After that, a short setup runs"
+  log "on this screen (network, the dashboard administrator, the AI assistant), and then"
+  log "the login screen shows the dashboard's address."
   ask "Press Enter to restart now. " >/dev/null
   systemctl reboot
 fi

@@ -1,0 +1,29 @@
+[Unit]
+Description=JARVIS OS first-start setup (installed system, until it is finished)
+# Never in the live image or while the installer or the recovery shell owns the console.
+ConditionPathExists=!/run/live
+ConditionPathExists=!/var/lib/jarvis/firstboot-done
+ConditionKernelCommandLine=!jarvis.install=1
+ConditionKernelCommandLine=!jarvis.install=auto
+ConditionKernelCommandLine=!jarvis.recover=1
+ConditionKernelCommandLine=!jarvis.firstboot=off
+After=home-ai.service systemd-networkd.service systemd-user-sessions.service plymouth-quit.service plymouth-quit-wait.service
+Wants=home-ai.service
+
+[Service]
+Type=simple
+# Its own screen (the eighth virtual console), so it never fights the login prompt on
+# the first one; the login screen comes back when the setup ends or is postponed.
+ExecStartPre=-/usr/bin/chvt 8
+ExecStart=/usr/local/sbin/jarvis-firstboot
+ExecStopPost=-/usr/bin/chvt 1
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty8
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+[Install]
+WantedBy=multi-user.target
