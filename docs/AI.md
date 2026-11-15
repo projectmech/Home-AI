@@ -88,3 +88,16 @@ yet.
 - Vosk and whisper.cpp are worth retesting in the same container (workflow "Voice
   bench (Vosk and whisper.cpp recheck)", run by hand). Vosk got 8 of 8 synthetic
   commands natively against PocketSphinx's 7 of 8.
+
+## Evidence 2026-11-15: the chosen model works with the assistant's prompt
+CI run 43655313631 (llama-server built for a Core 2, run natively on a modern CI CPU
+with 2 threads): Qwen2.5-1.5B-Instruct Q4_K_M, 1,117,320,736 bytes, SHA-256
+`6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e` (now pinned in
+`jarvis-model`). It answered the assistant's JSON prompt correctly: for "it is cold and
+dark in the kitchen, switch the light on please" it returned
+`{"reply": "switch the light on in the kitchen", "command": "turn on the kitchen light"}`,
+which the grammar accepts. Speed on that runner, without AVX: reading 5 and writing 4
+tokens a second. A real Core 2 will be slower (not measured). The OS image build
+(run 43655313679) compiled llama-server in the image, passed the no-AVX guard and the
+ISO inspection (model server, `jarvis-model` and its unit present). Not yet shown: a
+model installed and answering inside an installed image, or any speed on the Mac mini.
