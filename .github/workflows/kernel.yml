@@ -1,0 +1,31 @@
+name: Kernel
+
+# Builds the JARVIS kernel (kernel/, docs/KERNEL.md) as Debian packages from the
+# signed kernel.org source, with the drivers the owner's Mac mini needs.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - kernel/**
+      - .github/workflows/kernel.yml
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the kernel packages (in Debian trixie)
+        run: bash kernel/build.sh --out out/kernel
+      - name: Keep the packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-kernel-debs
+          path: out/kernel
+          if-no-files-found: ignore
+          retention-days: 14
